@@ -1,0 +1,202 @@
+# Builds a Windows package and publishes it as a GitHub Release.
+#
+# Two ways in:
+#
+#   * Push a tag matching v*  -- the normal path. The tag is the version.
+#   * Run it by hand          -- give a version; the tag is created for you.
+#     This exists for the first release, before any tag exists.
+#
+# Release notes come from the commit subjects since the previous tag. There is
+# no version arithmetic anywhere: the tag is the single source of truth, which
+# is why nothing here has to parse commit messages for intent.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release, with or without the leading v (e.g. 1.0.0)'
+        required: true
+        type: string
+      draft:
+        description: 'Publish as a draft, so the notes and package can be checked first'
+        required: false
+        type: boolean
+        default: true
+      core_ref:
+        description: 'Branch or tag of emu6205cc to build against'
+        required: false
+        type: string
+        default: 'main'
+
+# A second push to the same tag should not race the first.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write        # needed to create the tag and the release
+
+jobs:
+  windows:
+    name: Windows x64
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          # Full history and tags: the release notes are a diff between tags.
+          fetch-depth: 0
+
+      - name: Work out the version and the previous tag
+        id: v
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            version="${{ inputs.version }}"
+            version="${version#v}"
+            tag="v${version}"
+            draft="${{ inputs.draft }}"
+          else
+            tag="${GITHUB_REF_NAME}"
+            version="${tag#v}"
+            draft="false"
+          fi
+
+          # The newest tag reachable from here that is not the one being made.
+          # --merged keeps tags from unrelated branches out of the notes.
+          previous="$(git tag --sort=-v:refname --merged HEAD \
+                      | grep -v -x "${tag}" | head -n 1 || true)"
+
+          {
+            echo "version=${version}"
+            echo "tag=${tag}"
+            echo "previous=${previous}"
+            echo "draft=${draft}"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Releasing ${tag}; previous tag: ${previous:-none (first release)}"
+
+      - name: Cache fetched dependencies
+        uses: actions/cache@v4
+        with:
+          # SDL2 and doctest are built from source; the 6502 core is cheap to
+          # re-fetch but lands here too.
+          path: build/_deps
+          key: deps-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: deps-${{ runner.os }}-
+
+      - name: Configure
+        shell: bash
+        run: |
+          # No sibling checkout on a runner, so this also exercises the fetch
+          # fallback that lets the repository be cloned on its own.
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DEMU6502_GIT_TAG="${{ inputs.core_ref || 'main' }}"
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        shell: bash
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Stage the package
+        id: pkg
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="nescc_emu-${{ steps.v.outputs.version }}-windows-x64"
+          mkdir -p "dist/${name}"
+
+          cp build/bin/Release/nes_gui.exe      "dist/${name}/"
+          cp build/bin/Release/nes_run.exe      "dist/${name}/"
+          cp build/bin/Release/emu6502_lib.dll  "dist/${name}/"
+          cp build/bin/Release/SDL2.dll         "dist/${name}/"
+          cp LICENSE README.md ROADMAP.md       "dist/${name}/"
+
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+          ls -l "dist/${name}"
+
+      - name: Zip it
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "dist/${{ steps.pkg.outputs.name }}" `
+                           -DestinationPath "dist/${{ steps.pkg.outputs.name }}.zip"
+
+      - name: Write the release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          previous='${{ steps.v.outputs.previous }}'
+          repo="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
+
+          {
+            # An optional hand-written preamble. A generated commit list makes a
+            # poor answer to "what is this?", which is exactly what someone
+            # reading a first release wants to know.
+            if [ -f .github/release-intro.md ]; then
+              cat .github/release-intro.md
+              echo
+            fi
+
+            if [ -n "${previous}" ]; then
+              echo "## Changes since ${previous}"
+            else
+              echo "## History"
+            fi
+            echo
+
+            if [ -n "${previous}" ]; then
+              git log --no-merges --pretty=format:'- %s' "${previous}..HEAD"
+            else
+              git log --no-merges --pretty=format:'- %s'
+            fi
+            echo
+            echo
+
+            echo "## Download"
+            echo
+            echo "\`${{ steps.pkg.outputs.name }}.zip\` — Windows x64. Unzip and run"
+            echo "\`nes_gui.exe <rom.nes>\`. Everything needed is in the archive;"
+            echo "there is nothing to install."
+            echo
+            echo "**No ROMs are included or downloaded.** Supply your own."
+            echo
+
+            if [ -n "${previous}" ]; then
+              echo "**Full changelog**: ${repo}/compare/${previous}...${{ steps.v.outputs.tag }}"
+            fi
+          } > release-notes.md
+
+          cat release-notes.md
+
+      - name: Keep the package on the run as well
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pkg.outputs.name }}
+          path: dist/${{ steps.pkg.outputs.name }}.zip
+          if-no-files-found: error
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Creates the tag at this commit when it does not already exist, which
+          # is what makes the manual path work before the first tag.
+          gh release create "${{ steps.v.outputs.tag }}" \
+            "dist/${{ steps.pkg.outputs.name }}.zip" \
+            --title "${{ steps.v.outputs.tag }}" \
+            --notes-file release-notes.md \
+            --draft=${{ steps.v.outputs.draft }} \
+            --target "${GITHUB_SHA}"
