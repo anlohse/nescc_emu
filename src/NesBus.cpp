@@ -7,6 +7,9 @@ const std::uint16_t RAM_END      = 0x1FFF;
 const std::uint16_t RAM_MASK     = 0x07FF; // 2 KB mirrored four times
 const std::uint16_t PPU_END      = 0x3FFF;
 const std::uint16_t PPU_MASK     = 0x0007; // 8 registers mirrored every 8 bytes
+const std::uint16_t APU_BEGIN    = 0x4000;
+const std::uint16_t APU_CHANNELS_END = 0x4013;
+const std::uint16_t APU_STATUS   = 0x4015;
 const std::uint16_t OAM_DMA      = 0x4014;
 const std::uint16_t JOY1         = 0x4016;
 const std::uint16_t JOY2         = 0x4017;
@@ -24,8 +27,8 @@ const std::uint8_t CONTROLLER_OPEN_BUS = 0x40;
 const int OAM_DMA_CYCLES = 513;
 } // namespace
 
-NesBus::NesBus(Cartridge* cartridge, Ppu* ppu) :
-		m_ram(), m_cartridge(cartridge), m_ppu(ppu), m_dmaStall(0),
+NesBus::NesBus(Cartridge* cartridge, Ppu* ppu, Apu* apu) :
+		m_ram(), m_cartridge(cartridge), m_ppu(ppu), m_apu(apu), m_dmaStall(0),
 		m_stubReads(0), m_stubWrites(0) {
 	m_ram.fill(0);
 }
@@ -57,7 +60,11 @@ uint8 NesBus::read(uint16 address) {
 			return m_controllers[0].read() | CONTROLLER_OPEN_BUS;
 		if (address == JOY2)
 			return m_controllers[1].read() | CONTROLLER_OPEN_BUS;
-		// APU status at $4015 also has read side effects. Still stubbed.
+		// Reading $4015 acknowledges the APU's frame interrupt, so this must be
+		// the real read and never peek().
+		if (address == APU_STATUS)
+			return m_apu ? m_apu->readStatus() : 0;
+		// Everything else in this range is write-only or unmapped.
 		m_stubReads++;
 		return 0;
 	}
@@ -101,6 +108,12 @@ void NesBus::write(uint16 address, uint8 val) {
 			m_controllers[1].writeStrobe(val);
 			return;
 		}
+		if ((address >= APU_BEGIN && address <= APU_CHANNELS_END)
+				|| address == APU_STATUS || address == JOY2) {
+			if (m_apu)
+				m_apu->writeRegister(address, val);
+			return;
+		}
 		m_stubWrites++;
 		return;
 	}
@@ -121,6 +134,8 @@ std::uint8_t NesBus::peek(std::uint16_t address) const {
 			return m_controllers[0].peek() | CONTROLLER_OPEN_BUS;
 		if (address == JOY2)
 			return m_controllers[1].peek() | CONTROLLER_OPEN_BUS;
+		if (address == APU_STATUS)
+			return m_apu ? m_apu->peekStatus() : 0;
 		return 0;
 	}
 

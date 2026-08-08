@@ -25,6 +25,82 @@ struct ScriptedPress {
 	unsigned long long endFrame;
 };
 
+const int WAV_RATE = 44100;
+
+/**
+ * Decimates the APU's CPU-rate output to 44.1 kHz by averaging each window.
+ *
+ * No drift correction here, unlike the window front-end: there is no sound card
+ * to stay in step with, so the ratio is fixed and the result is deterministic.
+ * That is the point of dumping audio from the headless runner -- the same ROM
+ * and the same inputs produce a byte-identical WAV, which is testable.
+ */
+class WavRecorder {
+public:
+	WavRecorder() : m_phase(0.0), m_accumulator(0.0), m_count(0) { }
+
+	void consume(const std::vector<float>& input) {
+		const double ratio = static_cast<double>(nes::Apu::CPU_CLOCK_HZ) / WAV_RATE;
+		for (float sample : input) {
+			m_accumulator += sample;
+			m_count++;
+			m_phase += 1.0;
+			if (m_phase < ratio)
+				continue;
+			m_phase -= ratio;
+			m_samples.push_back(static_cast<float>(m_accumulator / m_count));
+			m_accumulator = 0.0;
+			m_count = 0;
+		}
+	}
+
+	std::size_t frames() const { return m_samples.size(); }
+
+	/** Mono 16-bit PCM. @return false if the file could not be written. */
+	bool write(const char* path) const {
+		std::FILE* f = std::fopen(path, "wb");
+		if (!f)
+			return false;
+
+		const std::uint32_t dataBytes = static_cast<std::uint32_t>(m_samples.size() * 2);
+		const std::uint32_t byteRate = WAV_RATE * 2;
+		auto u32 = [&](std::uint32_t v) { std::fwrite(&v, 4, 1, f); };
+		auto u16 = [&](std::uint16_t v) { std::fwrite(&v, 2, 1, f); };
+
+		std::fwrite("RIFF", 1, 4, f);
+		u32(36 + dataBytes);
+		std::fwrite("WAVEfmt ", 1, 8, f);
+		u32(16);              // PCM header size
+		u16(1);               // PCM
+		u16(1);               // mono
+		u32(WAV_RATE);
+		u32(byteRate);
+		u16(2);               // block align
+		u16(16);              // bits per sample
+		std::fwrite("data", 1, 4, f);
+		u32(dataBytes);
+
+		for (float sample : m_samples) {
+			// The mixer peaks around a quarter of unity with several channels
+			// playing, so this uses most of the format's range without ever
+			// reaching it. The clamp is a backstop, not the normal path -- if
+			// it engages regularly the gain is wrong.
+			float scaled = sample * 2.0f;
+			if (scaled > 1.0f) scaled = 1.0f;
+			if (scaled < -1.0f) scaled = -1.0f;
+			u16(static_cast<std::uint16_t>(static_cast<std::int16_t>(scaled * 32767.0f)));
+		}
+		std::fclose(f);
+		return true;
+	}
+
+private:
+	double m_phase;
+	double m_accumulator;
+	int m_count;
+	std::vector<float> m_samples;
+};
+
 void usage(const char* argv0) {
 	std::printf(
 		"usage: %s <rom.nes> [options]\n"
@@ -36,6 +112,7 @@ void usage(const char* argv0) {
 		"  --stop-on-trap    stop when PC stops advancing\n"
 		"  --frames=N        run N PPU frames, then stop\n"
 		"  --screenshot=FILE write the final frame as a binary PPM\n"
+		"  --audio=FILE      record the APU to a 44.1 kHz mono WAV\n"
 		"  --press=SPEC      hold a button for a while; repeatable\n"
 		"                    SPEC is BUTTON@FRAME[:HELD][/PORT], e.g.\n"
 		"                      --press=start@200        Start at frame 200 for 10\n"
@@ -128,6 +205,7 @@ int main(int argc, char** argv) {
 	bool trace = false;
 	bool stopOnTrap = false;
 	const char* screenshot = nullptr;
+	const char* audioPath = nullptr;
 	long long frames = -1;
 	long startPc = -1;
 	long long maxInstructions = 100000000LL;
@@ -147,6 +225,8 @@ int main(int argc, char** argv) {
 			frames = std::strtoll(rest, nullptr, 10);
 		} else if (startsWith(argv[i], "--screenshot=", &rest)) {
 			screenshot = rest;
+		} else if (startsWith(argv[i], "--audio=", &rest)) {
+			audioPath = rest;
 		} else if (startsWith(argv[i], "--press=", &rest)) {
 			ScriptedPress press;
 			if (!parsePress(rest, &press)) {
@@ -188,6 +268,12 @@ int main(int argc, char** argv) {
 	console.reset();
 	if (startPc >= 0)
 		console.cpuRegisters().pc = static_cast<uint16>(startPc);
+
+	// The APU only mixes when someone is listening; the rest of the time the
+	// channels still run but no samples are produced.
+	WavRecorder recorder;
+	if (audioPath)
+		console.apu().setSampleOutput(true);
 
 	// Disassemble through a peek view so tracing never disturbs device state.
 	nes::PeekBus peekBus(&console.bus());
@@ -240,6 +326,13 @@ int main(int argc, char** argv) {
 		console.step();
 		executed++;
 
+		if (audioPath) {
+			// Drain every step rather than every frame: at one sample per CPU
+			// cycle a long run would otherwise buffer hundreds of megabytes.
+			recorder.consume(console.apu().samples());
+			console.apu().clearSamples();
+		}
+
 		if (stopOnTrap && console.cpuRegisters().pc == pc) {
 			std::fprintf(stderr, "trapped at $%04X after %lld instructions\n", pc, executed);
 			break;
@@ -284,6 +377,14 @@ int main(int argc, char** argv) {
 			std::fprintf(stderr, "wrote %s\n", screenshot);
 		else
 			std::fprintf(stderr, "could not write %s\n", screenshot);
+	}
+
+	if (audioPath) {
+		if (recorder.write(audioPath))
+			std::fprintf(stderr, "wrote %s (%.2f seconds)\n", audioPath,
+					static_cast<double>(recorder.frames()) / WAV_RATE);
+		else
+			std::fprintf(stderr, "could not write %s\n", audioPath);
 	}
 
 	if (console.bus().stubReads() || console.bus().stubWrites())

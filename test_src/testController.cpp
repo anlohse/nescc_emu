@@ -192,7 +192,7 @@ TEST_CASE("controller_ports_no_longer_count_as_stubs") {
 	CHECK_EQ(bus.stubReads(), readsBefore);
 	CHECK_EQ(bus.stubWrites(), writesBefore);
 
-	bus.read(0x4015);                        // APU status is still a stub
+	bus.read(0x4018);                        // a disabled APU test register
 	CHECK_EQ(bus.stubReads(), readsBefore + 1);
 }
 

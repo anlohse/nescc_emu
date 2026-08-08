@@ -1,6 +1,7 @@
 #ifndef NES_NES_H
 #define NES_NES_H
 
+#include "Apu.h"
 #include "Cartridge.h"
 #include "NesBus.h"
 #include "Ppu.h"
@@ -51,8 +52,9 @@ public:
 	 *
 	 * Drains any OAM DMA stall first, then executes an instruction (or services
 	 * a pending interrupt), then ticks the PPU by three dots per CPU cycle and
-	 * forwards any NMI it raised. That ordering is what makes the console a
-	 * system rather than a CPU with peripherals bolted on.
+	 * the APU by one, and forwards the NMI or IRQ they raised. That ordering is
+	 * what makes the console a system rather than a CPU with peripherals bolted
+	 * on.
 	 *
 	 * @return the number of CPU cycles consumed.
 	 */
@@ -67,6 +69,8 @@ public:
 	NesBus& bus() { return *m_bus; }
 	Ppu& ppu() { return m_ppu; }
 	const Ppu& ppu() const { return m_ppu; }
+	Apu& apu() { return m_apu; }
+	const Apu& apu() const { return m_apu; }
 	/** Controller port 0 or 1. Set buttons on it and the running game sees them. */
 	Controller& controller(int port) { return m_bus->controller(port); }
 	Cartridge* cartridge() const { return m_cartridge.get(); }
@@ -78,6 +82,7 @@ private:
 	Registers m_regs;
 	std::unique_ptr<Cartridge> m_cartridge;
 	Ppu m_ppu;
+	Apu m_apu;
 	std::unique_ptr<NesBus> m_bus;
 	default_clock m_clock;
 	std::unique_ptr<Processor> m_cpu;

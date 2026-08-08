@@ -1,3 +1,7 @@
 /build
 /build_*
 /roms
+
+# Screenshots land in the working directory.
+nes-shot-*.bmp
+*.ppm

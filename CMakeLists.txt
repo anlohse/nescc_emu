@@ -32,6 +32,7 @@ add_subdirectory("${EMU6502_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/emu6502")
 # Console library
 # ------------------------------------------------------------------------------
 add_library(nes_lib STATIC
+    src/Apu.cpp
     src/Cartridge.cpp
     src/Controller.cpp
     src/Mapper.cpp
@@ -46,8 +47,45 @@ target_link_libraries(nes_lib PUBLIC emu6502::emu6502)
 # ------------------------------------------------------------------------------
 # Command-line runner
 # ------------------------------------------------------------------------------
+# Stays headless and dependency-free on purpose: tracing, scripted input and
+# screenshots have to work where SDL is not available, which includes CI.
 add_executable(nes_run src/main.cpp)
 target_link_libraries(nes_run PRIVATE nes_lib)
+
+# ------------------------------------------------------------------------------
+# SDL2 window front-end
+# ------------------------------------------------------------------------------
+option(NES_BUILD_GUI "Build the SDL2 window front-end" ON)
+
+if(NES_BUILD_GUI)
+    include(FetchContent)
+
+    # Prefer an installed SDL2; fall back to building one. The fallback is what
+    # makes a fresh checkout work with nothing but a compiler and git.
+    find_package(SDL2 QUIET)
+    if(NOT SDL2_FOUND AND NOT TARGET SDL2::SDL2)
+        message(STATUS "SDL2 not found; fetching it")
+        set(SDL_TEST   OFF CACHE BOOL "" FORCE)
+        set(SDL_SHARED ON  CACHE BOOL "" FORCE)
+        set(SDL_STATIC OFF CACHE BOOL "" FORCE)
+        FetchContent_Declare(
+            SDL2
+            GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
+            GIT_TAG release-2.30.9
+            GIT_SHALLOW TRUE
+        )
+        FetchContent_MakeAvailable(SDL2)
+    endif()
+
+    add_executable(nes_gui WIN32 src/gui_main.cpp)
+    target_link_libraries(nes_gui PRIVATE nes_lib SDL2::SDL2)
+
+    # SDL renames main() to SDL_main and supplies the real entry point. On
+    # Windows that is also what lets a WIN32 (non-console) executable start.
+    if(TARGET SDL2::SDL2main)
+        target_link_libraries(nes_gui PRIVATE SDL2::SDL2main)
+    endif()
+endif()
 
 # ------------------------------------------------------------------------------
 # Tests
@@ -70,6 +108,7 @@ if(NES_BUILD_TESTS)
     add_executable(nes_test
         test_src/testMain.cpp
         test_src/testCartridge.cpp
+        test_src/testApu.cpp
         test_src/testBus.cpp
         test_src/testController.cpp
         test_src/testNestest.cpp

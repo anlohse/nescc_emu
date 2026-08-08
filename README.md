@@ -4,9 +4,10 @@ A NES emulator built on the [emu6502](../emu6502) core.
 
 ## Status
 
-**Super Mario Bros is playable.** Press Start, the game begins; hold Right and Mario
-runs; press A and he jumps over the Goomba. Scrolling, sprites, and the sprite-zero
-split that keeps the status bar fixed while the level moves beneath it all work.
+**Super Mario Bros is playable, in a window, at NTSC speed, with sound.** Press Start,
+the game begins; hold Right and Mario runs; press A and he jumps over the Goomba, and
+the overworld theme plays while he does. Scrolling, sprites, and the sprite-zero split
+that keeps the status bar fixed while the level moves beneath it all work.
 
 | Component | State |
 | --- | --- |
@@ -22,15 +23,18 @@ split that keeps the status bar fixed while the level moves beneath it all work.
 | Sprite-zero hit | reported at the dot of overlap, so mid-frame splits work |
 | OAM DMA (`$4014`) | copies the page and stalls the CPU 513 cycles |
 | Controllers (`$4016/$4017`) | both ports, latch and shift register, open bus in the high bits |
-| Input source | scripted only — `--press`; no keyboard yet |
-| Output | headless — `--screenshot` writes a PPM; no window yet |
-| APU `$4000-$4015` | **stubbed** — reads return 0, writes counted but inert |
+| APU channels | two pulses with sweep, triangle, noise, DMC — all five |
+| APU frame counter | 4- and 5-step sequences, quarter/half clocks, frame IRQ |
+| APU mixing | the hardware's nonlinear curve, high-pass and anti-alias filtering |
+| Window | `nes_gui`: SDL2 video and audio, keyboard, paced to NTSC's 60.0988 Hz |
+| Headless runner | `nes_run`: tracing, scripted input, PPM screenshots, WAV capture |
 
 ## Layout
 
 ```
 include/nes/     public headers
-src/             Cartridge (iNES), Mapper (NROM), Ppu, Controller, NesBus, Nes, the CLI
+src/             Cartridge (iNES), Mapper (NROM), Ppu, Apu, Controller, NesBus, Nes
+                 main.cpp (headless runner), gui_main.cpp (SDL2 window)
 test_src/        doctest suite, including the nestest harness
 ```
 
@@ -48,10 +52,49 @@ cmake -S . -B build -DEMU6502_DIR=/path/to/emu6502
 ```
 
 Its own tests and debugger stay off when consumed this way — build those from that
-project directly. Everything lands in `build/bin/<config>/` so `emu6502_lib.dll` sits
-beside the executables on Windows.
+project directly. Everything lands in `build/bin/<config>/` so `emu6502_lib.dll` and
+`SDL2.dll` sit beside the executables on Windows.
 
-## Running
+SDL2 is used by the window front-end only. An installed one is preferred; failing that
+CMake fetches and builds it, which is what makes a fresh checkout work with nothing but
+a compiler and git — at the cost of a slower first configure. To skip it entirely and
+build only the headless runner and the tests:
+
+```bash
+cmake -S . -B build -DNES_BUILD_GUI=OFF
+```
+
+## Playing
+
+```bash
+./build/bin/Release/nes_gui rom.nes --scale=3
+```
+
+| | Player 1 | Player 2 |
+| --- | --- | --- |
+| D-pad | arrows | numpad 8 4 5 6 |
+| A / B | Z / X | numpad 1 / 2 |
+| Start / Select | Enter / Right Shift | numpad Enter / + |
+
+`P` or `Space` pauses, `N` advances one frame while paused, `M` mutes, holding `Tab`
+runs unthrottled, `R` resets, `F12` saves a screenshot, `Esc` quits. `--scale=N` sets
+the window size, `--fullscreen` starts borderless, `--no-audio` runs silent; the picture
+letterboxes to the NES's aspect at any window size, with nearest-neighbour scaling.
+
+Audio is 44.1 kHz mono, queued rather than driven from a callback thread — the emulator
+produces samples in frame-sized bursts on the main thread, and the device's own buffer
+smooths them out. Sound and video are paced by two clocks nobody synchronised, so the
+resampling ratio is nudged by a few parts in a thousand depending on how much audio is
+queued: too little starves the device into crackling, too much turns into latency. The
+correction is far below the threshold of hearing and holds the two together
+indefinitely.
+
+The title bar shows the real frame rate, which should read `60.1 fps` — NTSC is
+60.0988 Hz, not 60. The pacing is an absolute deadline advanced by exactly one frame
+each time, so per-frame overshoot cannot accumulate into drift, and vsync is
+deliberately off: on a 144 Hz display it would run the console more than twice too fast.
+
+## Running headless
 
 ```bash
 ./build/bin/Release/nes_run rom.nes --trace --stop-on-trap
@@ -65,8 +108,8 @@ C002  8D 00 02  STA $0200      A:42 X:00 Y:00 P:24 SP:FD CYC:9
 Options: `--trace`, `--start-pc=HEX`, `--max=N`, `--stop-on-trap`. Disassembly goes
 through a read-only `PeekBus`, so tracing never disturbs device state.
 
-On exit it summarises PPU state, which is how you check a game is alive while there is
-still nothing to look at:
+On exit it summarises PPU state, which is how you check a game is alive without opening
+a window:
 
 ```
 PPU: frame 303, scanline 58 dot 89, ctrl=10 mask=1E, rendering on
@@ -87,10 +130,22 @@ To actually see it, grab a frame:
 viewer opens. Super Mario Bros reaches its title screen by frame ~120 and starts the
 attract-mode demo around frame ~900.
 
-### Input
+Sound comes out the same way:
 
-There is no window yet, so buttons are scripted on the command line with `--press`,
-which takes `BUTTON@FRAME[:HELD][/PORT]` and can be repeated:
+```bash
+./build/bin/Release/nes_run rom.nes --press=start@200 --frames=900 --audio=out.wav
+```
+
+`--audio` writes 44.1 kHz mono 16-bit PCM. Unlike the window, this uses a fixed
+resampling ratio and no drift correction — there is no sound card to stay in step with,
+so the same ROM and the same inputs produce the same WAV every time. That is what makes
+audio testable rather than merely audible.
+
+### Scripted input
+
+Headless runs take their buttons from `--press`, which is `BUTTON@FRAME[:HELD][/PORT]`
+and can be repeated. Deterministic, so it reproduces exactly — which is what makes it
+worth keeping now that there is a keyboard:
 
 ```bash
 ./build/bin/Release/nes_run smb.nes --press=start@200 --press=right@430:200 --press=a@600:20 --frames=615 --screenshot=jump.ppm
@@ -146,17 +201,40 @@ reset vector from the cartridge via the bus. `Nes` drives `Processor` directly, 
 also the shape a multi-chip system needs — the master clock has to advance the PPU and
 APU alongside the CPU rather than letting the CPU pace itself.
 
-**The clock is free-running.** `default_clock` counts cycles and never sleeps. Pacing
-belongs one level up, once there is a frame to pace against.
+**The clock is free-running; the window paces.** `default_clock` counts cycles and never
+sleeps, so the CPU runs as fast as it can and `Nes` reports how many cycles went by.
+Real time is imposed one level up, by `nes_gui`'s frame deadline. That split is why the
+same core can run 30 million instructions in a test harness at full speed and 60.0988
+frames a second in a window, with no switch between the two.
+
+**Input is polled once per frame, not accumulated from events.** A game latches the pad
+once per frame and sees exactly what was held at that instant, so polling matches the
+hardware and avoids inventing key-repeat and event-ordering that the pad does not have.
+The one addition is that a key whose press *and* release both arrive inside a single
+frame is still reported for that frame — otherwise a tap faster than 16 ms vanishes.
+
+**The APU mixes nonlinearly and filters its own output.** The hardware sums its five
+channels through a resistor ladder, so a channel gets quieter as the others get louder;
+a linear sum is audibly wrong, harsh and too loud once more than two channels play. The
+two output filters belong in the APU rather than the front-end for concrete reasons: the
+high-pass removes the DC offset the positive-only mixer would otherwise carry, which is
+a click every time audio starts, and the low-pass is anti-aliasing — samples come out at
+1.79 MHz and get decimated about 40:1, so without it everything above the device's
+Nyquist folds back down as noise.
 
 ## Known gaps
 
-- **No window and no live input** — buttons are scripted with `--press` and frames only
-  come out through `--screenshot`.
+- **No save states, no battery-backed save files**, so a game with a save chip cannot
+  keep one.
+- **No gamepad support** — keyboard only. SDL's game-controller API would be a small
+  addition on top of `Controller`.
 - **Opposing directions are not filtered.** Real hardware lets Left and Right close
   together and some games glitch when they do; that filtering belongs to whatever
   drives the input, so it is not done in `Controller`.
-- **No APU**, so no sound, and no DMC IRQ.
+- **The APU's timing is cycle-driven but not cycle-exact.** The frame sequencer lands on
+  the right CPU cycles, but the `$4017` write delay is approximated, and the DMC charges
+  a flat 4 cycles per fetch where hardware varies with what the CPU was doing. Music and
+  effects are right; a test ROM measuring the sequencer to the cycle would not be.
 - **Scanline-granular rendering.** Each line is drawn from the scroll state at its
   start, so per-line raster effects work but mid-line scroll changes do not. That is
   enough for most games and not enough for a few.
@@ -169,12 +247,15 @@ belongs one level up, once there is a frame to pace against.
 
 ## Next
 
-1. A window and a frame-paced main loop, with the keyboard wired to `Controller` — the
-   point where `emu6502`'s clock abstraction moves up to the system level, and the point
-   at which this stops being a batch job.
+1. **More mappers.** NROM is 32 KB of PRG and nothing else, which is roughly the first
+   two years of the library. MMC1 and UNROM open up most of the rest; MMC3 adds a
+   scanline-counter IRQ, which is the first thing here that would demand tighter PPU
+   timing than the current scanline granularity.
 2. A decimal-mode switch in emu6502: the 2A03 ignores the `D` flag in `ADC`/`SBC`, and
    the core currently implements full BCD.
 3. nestest, whenever the ROM is available — still the only thing that would validate
-   the undocumented opcodes and exact cycle counts against a reference.
-4. More mappers — MMC1, UNROM, MMC3 (which needs a scanline-counter IRQ).
-5. APU.
+   the undocumented opcodes and exact cycle counts against a reference. The `blargg`
+   APU test ROMs are the equivalent gate for the sound, and would decide how much the
+   timing approximations above actually matter.
+4. Save states. The console's whole state is a handful of plain structs, so this is
+   mostly a serialisation exercise — and it makes debugging the harder games practical.

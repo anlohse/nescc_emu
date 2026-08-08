@@ -1,6 +1,7 @@
 #ifndef NES_NESBUS_H
 #define NES_NESBUS_H
 
+#include "Apu.h"
 #include "Cartridge.h"
 #include "Controller.h"
 #include "Ppu.h"
@@ -24,13 +25,16 @@ namespace nes {
  *   $4000-$401F  APU and I/O registers
  *   $4020-$FFFF  cartridge, via the mapper
  *
- * PPU registers, OAM DMA at $4014 and the two controller ports at $4016/$4017
- * are live. The APU is still stubbed: reads return 0 and writes are counted but
- * inert.
+ * Every region is live: PPU registers, the APU, OAM DMA at $4014 and both
+ * controller ports.
+ *
+ * $4017 is the one address whose meaning depends on direction. Reading it is
+ * controller port two; writing it is the APU's frame counter. They are
+ * unrelated registers that happen to share a pin.
  */
 class NesBus : public Bus {
 public:
-	NesBus(Cartridge* cartridge, Ppu* ppu);
+	NesBus(Cartridge* cartridge, Ppu* ppu, Apu* apu = nullptr);
 
 	uint8 read(uint16 address) override;
 	void write(uint16 address, uint8 val) override;
@@ -66,7 +70,9 @@ public:
 	Controller& controller(int port) { return m_controllers[port & 1]; }
 	const Controller& controller(int port) const { return m_controllers[port & 1]; }
 
-	/** Count of accesses to still-unimplemented APU registers. */
+	void setApu(Apu* apu) { m_apu = apu; }
+
+	/** Count of accesses to addresses in $4000-$401F with nothing behind them. */
 	unsigned long stubReads() const { return m_stubReads; }
 	unsigned long stubWrites() const { return m_stubWrites; }
 
@@ -74,6 +80,7 @@ private:
 	std::array<std::uint8_t, 0x800> m_ram;
 	Cartridge* m_cartridge;
 	Ppu* m_ppu;
+	Apu* m_apu;
 	Controller m_controllers[2];
 	int m_dmaStall;
 	unsigned long m_stubReads;

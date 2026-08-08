@@ -71,17 +71,19 @@ TEST_CASE("ppu_registers_mirror_every_8_bytes") {
 
 TEST_CASE("peek_does_not_disturb_device_state") {
 	// This is the whole reason peek() exists: a memory viewer must not count as
-	// a CPU access. The PPU registers are covered in testPpu.cpp and the
-	// controller ports in testController.cpp; here it is the still-stubbed APU.
+	// a CPU access. The PPU registers are covered in testPpu.cpp, the controller
+	// ports in testController.cpp and the APU in testApu.cpp; what is left in
+	// $4000-$401F is write-only or unmapped, and $4018+ are the disabled test
+	// registers -- nothing answers there.
 	Nes console;
 	NesBus& bus = console.bus();
 
 	const unsigned long readsBefore = bus.stubReads();
-	bus.peek(0x4015);
+	bus.peek(0x4018);
 	bus.peek(0x4000);
 	CHECK_EQ(bus.stubReads(), readsBefore);   // peek is invisible to devices
 
-	bus.read(0x4015);
+	bus.read(0x4018);
 	CHECK_EQ(bus.stubReads(), readsBefore + 1);
 }
 
