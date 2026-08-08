@@ -1,0 +1,293 @@
+//
+// nes_run -- load a .nes image and run it.
+//
+// Headless: --screenshot writes the last rendered frame as a PPM, and --trace
+// emits a per-instruction log that can be diffed against a reference.
+//
+
+#include "nes/Nes.h"
+
+#include <6502cc/unasm.h>
+
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <string>
+#include <vector>
+
+namespace {
+
+/** A scripted button press: hold @a buttons from @a startFrame for @a frames. */
+struct ScriptedPress {
+	std::uint8_t buttons;
+	int port;
+	unsigned long long startFrame;
+	unsigned long long endFrame;
+};
+
+void usage(const char* argv0) {
+	std::printf(
+		"usage: %s <rom.nes> [options]\n"
+		"\n"
+		"  --trace           write one line per instruction to stdout\n"
+		"  --start-pc=HEX    begin at HEX instead of the reset vector\n"
+		"                    (nestest's automated mode wants C000)\n"
+		"  --max=N           stop after N instructions (default 100000000)\n"
+		"  --stop-on-trap    stop when PC stops advancing\n"
+		"  --frames=N        run N PPU frames, then stop\n"
+		"  --screenshot=FILE write the final frame as a binary PPM\n"
+		"  --press=SPEC      hold a button for a while; repeatable\n"
+		"                    SPEC is BUTTON@FRAME[:HELD][/PORT], e.g.\n"
+		"                      --press=start@200        Start at frame 200 for 10\n"
+		"                      --press=right@260:120    Right for 120 frames\n"
+		"                      --press=a@300:4/2        A on the second pad\n"
+		"                    buttons: a b select start up down left right\n"
+		"\n"
+		"Trace format matches the register fields of the standard nestest log:\n"
+		"  C000  4C F5 C5  JMP $c5f5   A:00 X:00 Y:00 P:24 SP:FD CYC:7\n",
+		argv0);
+}
+
+bool startsWith(const char* s, const char* prefix, const char** rest) {
+	const std::size_t n = std::strlen(prefix);
+	if (std::strncmp(s, prefix, n) != 0)
+		return false;
+	*rest = s + n;
+	return true;
+}
+
+/**
+ * Parse BUTTON@FRAME[:HELD][/PORT].
+ *
+ * A press has to last several frames to register: a game samples the pad once
+ * per frame, and menus commonly want to see the button held across two or three
+ * before acting. Ten is a comfortable default -- about a sixth of a second.
+ */
+bool parsePress(const char* spec, ScriptedPress* out) {
+	const char* at = std::strchr(spec, '@');
+	if (!at || at == spec)
+		return false;
+
+	const std::string name(spec, at - spec);
+	out->buttons = nes::Controller::buttonFromName(name.c_str());
+	if (out->buttons == 0)
+		return false;
+
+	char* end = nullptr;
+	const unsigned long long start = std::strtoull(at + 1, &end, 10);
+	if (end == at + 1)
+		return false;
+
+	unsigned long long held = 10;
+	out->port = 0;
+	while (*end == ':' || *end == '/') {
+		const char sep = *end;
+		char* next = nullptr;
+		const unsigned long long value = std::strtoull(end + 1, &next, 10);
+		if (next == end + 1)
+			return false;
+		if (sep == ':')
+			held = value;
+		else
+			out->port = (value >= 2) ? 1 : 0;   // ports named 1 and 2, indexed 0 and 1
+		end = next;
+	}
+	if (*end != '\0' || held == 0)
+		return false;
+
+	out->startFrame = start;
+	out->endFrame = start + held;
+	return true;
+}
+
+/** Dump the framebuffer as a binary PPM -- viewable anywhere, no dependencies. */
+bool writePpm(const char* path, const nes::Ppu& ppu) {
+	std::FILE* f = std::fopen(path, "wb");
+	if (!f)
+		return false;
+	std::fprintf(f, "P6\n%d %d\n255\n", nes::Ppu::SCREEN_WIDTH, nes::Ppu::SCREEN_HEIGHT);
+	const std::uint8_t* fb = ppu.framebuffer();
+	const std::uint32_t* palette = nes::Ppu::nesPaletteRgb();
+	for (int i = 0; i < nes::Ppu::SCREEN_WIDTH * nes::Ppu::SCREEN_HEIGHT; i++) {
+		const std::uint32_t rgb = palette[fb[i] & 0x3F];
+		const unsigned char pixel[3] = {
+			static_cast<unsigned char>((rgb >> 16) & 0xFF),
+			static_cast<unsigned char>((rgb >> 8) & 0xFF),
+			static_cast<unsigned char>(rgb & 0xFF)
+		};
+		std::fwrite(pixel, 1, 3, f);
+	}
+	std::fclose(f);
+	return true;
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+	const char* romPath = nullptr;
+	bool trace = false;
+	bool stopOnTrap = false;
+	const char* screenshot = nullptr;
+	long long frames = -1;
+	long startPc = -1;
+	long long maxInstructions = 100000000LL;
+	std::vector<ScriptedPress> presses;
+
+	for (int i = 1; i < argc; i++) {
+		const char* rest = nullptr;
+		if (std::strcmp(argv[i], "--trace") == 0) {
+			trace = true;
+		} else if (std::strcmp(argv[i], "--stop-on-trap") == 0) {
+			stopOnTrap = true;
+		} else if (startsWith(argv[i], "--start-pc=", &rest)) {
+			startPc = std::strtol(rest, nullptr, 16);
+		} else if (startsWith(argv[i], "--max=", &rest)) {
+			maxInstructions = std::strtoll(rest, nullptr, 10);
+		} else if (startsWith(argv[i], "--frames=", &rest)) {
+			frames = std::strtoll(rest, nullptr, 10);
+		} else if (startsWith(argv[i], "--screenshot=", &rest)) {
+			screenshot = rest;
+		} else if (startsWith(argv[i], "--press=", &rest)) {
+			ScriptedPress press;
+			if (!parsePress(rest, &press)) {
+				std::fprintf(stderr, "bad --press spec: %s\n", rest);
+				return 2;
+			}
+			presses.push_back(press);
+		} else if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
+			usage(argv[0]);
+			return 0;
+		} else if (argv[i][0] == '-') {
+			std::fprintf(stderr, "unknown option: %s\n", argv[i]);
+			return 2;
+		} else if (!romPath) {
+			romPath = argv[i];
+		} else {
+			std::fprintf(stderr, "unexpected argument: %s\n", argv[i]);
+			return 2;
+		}
+	}
+
+	if (!romPath) {
+		usage(argv[0]);
+		return 2;
+	}
+
+	nes::Nes console;
+	std::string error;
+	if (!console.loadRom(romPath, &error)) {
+		std::fprintf(stderr, "%s\n", error.c_str());
+		return 1;
+	}
+
+	const nes::Cartridge* cart = console.cartridge();
+	std::fprintf(stderr, "%s: mapper %d, PRG %zu KB, CHR %zu KB, %s mirroring%s\n",
+			romPath, cart->mapperNumber(), cart->prgSize() / 1024, cart->chrSize() / 1024,
+			nes::toString(cart->mirroring()), cart->hasBattery() ? ", battery" : "");
+
+	console.reset();
+	if (startPc >= 0)
+		console.cpuRegisters().pc = static_cast<uint16>(startPc);
+
+	// Disassemble through a peek view so tracing never disturbs device state.
+	nes::PeekBus peekBus(&console.bus());
+	UnAsm unasm;
+
+	const std::uint64_t frameTarget = frames >= 0
+			? console.ppu().frame() + static_cast<std::uint64_t>(frames)
+			: 0;
+
+	long long executed = 0;
+	std::uint64_t lastInputFrame = ~std::uint64_t(0);
+	while (executed < maxInstructions) {
+		if (frames >= 0 && console.ppu().frame() >= frameTarget)
+			break;
+
+		// Re-evaluate the script once per frame. A game latches the pad in its
+		// NMI handler, so frame granularity is as fine as scripted input can
+		// usefully be.
+		const std::uint64_t frame = console.ppu().frame();
+		if (!presses.empty() && frame != lastInputFrame) {
+			lastInputFrame = frame;
+			std::uint8_t held[2] = { 0, 0 };
+			for (const ScriptedPress& press : presses)
+				if (frame >= press.startFrame && frame < press.endFrame)
+					held[press.port] |= press.buttons;
+			console.controller(0).setButtons(held[0]);
+			console.controller(1).setButtons(held[1]);
+		}
+
+		const Registers& r = console.cpuRegisters();
+		const uint16 pc = r.pc;
+
+		if (trace) {
+			Registers probe = { };
+			probe.pc = pc;
+			std::string text = unasm.unasm_line(&peekBus, &probe);
+			const int length = static_cast<int>(probe.pc - pc);
+
+			char bytes[16] = { 0 };
+			int at = 0;
+			for (int b = 0; b < length && at < 12; b++)
+				at += std::snprintf(bytes + at, sizeof(bytes) - at, "%02X ",
+						peekBus.read(static_cast<uint16>(pc + b)));
+
+			std::printf("%04X  %-9s %-14s A:%02X X:%02X Y:%02X P:%02X SP:%02X CYC:%llu\n",
+					pc, bytes, text.c_str(), r.a, r.x, r.y, r.sr, r.sp,
+					static_cast<unsigned long long>(console.cycles()));
+		}
+
+		console.step();
+		executed++;
+
+		if (stopOnTrap && console.cpuRegisters().pc == pc) {
+			std::fprintf(stderr, "trapped at $%04X after %lld instructions\n", pc, executed);
+			break;
+		}
+	}
+
+	const Registers& r = console.cpuRegisters();
+	std::fprintf(stderr,
+			"stopped: PC=%04X A=%02X X=%02X Y=%02X P=%02X SP=%02X after %lld instructions, "
+			"%llu cycles\n",
+			r.pc, r.a, r.x, r.y, r.sr, r.sp, executed,
+			static_cast<unsigned long long>(console.cycles()));
+	// nestest reports its results here.
+	std::fprintf(stderr, "result bytes: $02=%02X $03=%02X\n",
+			console.bus().peek(0x0002), console.bus().peek(0x0003));
+
+	// Until there is a renderer, this is how you tell whether a game is
+	// actually building a screen: count what it has put in video memory.
+	const nes::Ppu& ppu = console.ppu();
+	int nametableBytes = 0;
+	for (int a = 0x2000; a < 0x3000; a++)
+		if (ppu.vramRead(static_cast<std::uint16_t>(a)) != 0)
+			nametableBytes++;
+	int oamBytes = 0;
+	for (int i = 0; i < 256; i++)
+		if (ppu.readOam(static_cast<std::uint8_t>(i)) != 0)
+			oamBytes++;
+
+	std::fprintf(stderr,
+			"PPU: frame %llu, scanline %d dot %d, ctrl=%02X mask=%02X, rendering %s\n",
+			static_cast<unsigned long long>(ppu.frame()), ppu.scanline(), ppu.dot(),
+			ppu.control(), ppu.mask(), ppu.renderingEnabled() ? "on" : "off");
+	std::fprintf(stderr, "     %d/4096 nametable bytes written, %d/256 OAM bytes set\n",
+			nametableBytes, oamBytes);
+	std::fprintf(stderr, "     palette:");
+	for (int i = 0; i < 16; i++)
+		std::fprintf(stderr, " %02X", ppu.vramRead(static_cast<std::uint16_t>(0x3F00 + i)));
+	std::fprintf(stderr, "\n");
+
+	if (screenshot) {
+		if (writePpm(screenshot, ppu))
+			std::fprintf(stderr, "wrote %s\n", screenshot);
+		else
+			std::fprintf(stderr, "could not write %s\n", screenshot);
+	}
+
+	if (console.bus().stubReads() || console.bus().stubWrites())
+		std::fprintf(stderr, "note: %lu reads and %lu writes hit unimplemented APU/input registers\n",
+				console.bus().stubReads(), console.bus().stubWrites());
+	return 0;
+}

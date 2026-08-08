@@ -1,0 +1,21 @@
+# Line endings are LF in the repository and LF in the working tree, on every
+# platform, regardless of each developer's core.autocrlf setting. Without this,
+# core.autocrlf=true checks files out as CRLF on Windows while storing LF, which
+# makes Git warn on every `git add` and produces spurious whole-file diffs when
+# the same tree is used from both Windows and Linux.
+* text=auto eol=lf
+
+# Never apply end-of-line conversion to these.
+*.res binary
+*.bin binary
+*.exe binary
+*.com binary
+*.zip binary
+*.hex binary
+*.s19 binary
+*.lst binary
+*.ipch binary
+*.pdb binary
+*.obj binary
+*.lib binary
+*.dll binary
