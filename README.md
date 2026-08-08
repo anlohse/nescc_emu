@@ -330,6 +330,16 @@ Nyquist folds back down as noise.
 - **Opposing directions are not filtered.** Real hardware lets Left and Right close
   together and some games glitch when they do; that filtering belongs to whatever
   drives the input, so it is not done in `Controller`.
+- **The frame interrupt starts inhibited**, where the documented power-up state of
+  `$4017` is `$00`, which enables it. This is a deliberate deviation. A game that wants
+  the frame interrupt must write `$4017` regardless — that register selects the four- or
+  five-step sequence and is the only way to know the sequencer's phase — so a game that
+  never writes it cannot be relying on the interrupt. Powering up with it enabled
+  silences *Ikinari Musician* outright: it never writes `$4017` and never reads `$4015`,
+  so the interrupt asserts and is never acknowledged, and its handler then runs about
+  113 times a frame writing `$4015 = 0`, turning off every channel. Games that ask for
+  the interrupt are unaffected; Super Mario Bros produces byte-identical audio either
+  way. Worth revisiting against blargg's APU test ROMs.
 - **The APU's timing is cycle-driven but not cycle-exact.** The frame sequencer lands on
   the right CPU cycles, but the `$4017` write delay is approximated, and the DMC charges
   a flat 4 cycles per fetch where hardware varies with what the CPU was doing. Music and

@@ -126,6 +126,32 @@ TEST_CASE("a_disabled_channel_ignores_length_writes") {
 /* Frame counter                                                             */
 /* ------------------------------------------------------------------------ */
 
+TEST_CASE("a_game_that_never_writes_4017_gets_no_frame_irq") {
+	// A deliberate deviation from the documented power-up state, and the reason
+	// is a real game: Ikinari Musician never writes $4017 and never reads
+	// $4015, so an interrupt enabled at power-up is asserted forever. Its
+	// handler runs about 113 times a frame and writes $4015 = 0 every time,
+	// turning off every channel -- a music program with no sound.
+	//
+	// Writing $4017 is the only way to select the sequence or know its phase,
+	// so a game that never writes it cannot be relying on the interrupt.
+	Apu apu;
+	apu.tick(FULL_SEQUENCE * 4);
+	CHECK_FALSE(apu.irqAsserted());
+	CHECK_EQ(apu.peekStatus() & Apu::STATUS_FRAME_IRQ, 0);
+}
+
+TEST_CASE("writing_4017_with_the_inhibit_clear_turns_the_irq_on") {
+	// The other half of the deviation: asking for it still works.
+	Apu apu;
+	apu.tick(FULL_SEQUENCE * 2);
+	REQUIRE_FALSE(apu.irqAsserted());
+
+	apu.writeRegister(0x4017, 0x00);
+	apu.tick(FULL_SEQUENCE + 10);
+	CHECK(apu.irqAsserted());
+}
+
 TEST_CASE("four_step_mode_raises_an_irq_at_the_end_of_the_sequence") {
 	Apu apu;
 	apu.writeRegister(0x4017, 0x00);          // 4-step, IRQ enabled

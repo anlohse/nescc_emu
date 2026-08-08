@@ -235,7 +235,21 @@ void Apu::reset() {
 	m_generateSamples = generate;
 	m_frameCounter = 0;
 	m_frameMode = 4;
-	m_frameIrqInhibit = false;
+	// Inhibited until the game asks for it, which is a deliberate deviation
+	// from the documented power-up state of $4017 = $00.
+	//
+	// A game that wants the frame interrupt has to write $4017 anyway: that is
+	// the only way to choose the four- or five-step sequence and the only way to
+	// know the sequencer's phase. A game that never writes it has expressed no
+	// intent to use the interrupt -- and cannot have, since it could not know
+	// when the first one would arrive.
+	//
+	// Powering up with it enabled instead silences Ikinari Musician completely.
+	// That game never writes $4017 and never reads $4015, so the frame interrupt
+	// asserts and is never acknowledged; its handler then runs about 113 times a
+	// frame, and that handler writes $4015 = 0, which turns every channel off. A
+	// music program with no sound.
+	m_frameIrqInhibit = true;
 	m_frameIrq = false;
 	m_dmcIrq = false;
 	m_frameResetDelay = 0;
