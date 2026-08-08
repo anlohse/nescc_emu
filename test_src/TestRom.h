@@ -23,6 +23,9 @@ struct Options {
 	int nes20Timing = 0;
 	// iNES 1.0 byte 9 bit 0, the only region flag that format has.
 	bool inesPalFlag = false;
+	// NES 2.0 byte 8, high nibble. For mappers 2/3/7, submapper 2 means the
+	// board has bus conflicts and 1 means it does not.
+	int submapper = 0;
 };
 
 /**
@@ -55,7 +58,9 @@ inline std::vector<std::uint8_t> build(const Options& o,
 	image.push_back(flags6);
 	image.push_back(flags7);
 	for (int i = 8; i < 16; i++) {
-		if (i == 9)
+		if (i == 8)
+			image.push_back(static_cast<std::uint8_t>((o.submapper & 0x0F) << 4));
+		else if (i == 9)
 			image.push_back(static_cast<std::uint8_t>(o.inesPalFlag ? 1 : 0));
 		else if (i == 12)
 			image.push_back(static_cast<std::uint8_t>(o.nes20Timing & 3));

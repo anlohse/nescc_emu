@@ -67,6 +67,21 @@ std::unique_ptr<Cartridge> Cartridge::fromINes(const std::vector<std::uint8_t>& 
 	}
 
 	const int mapperNumber = ((flags7 & 0xF0) | (flags6 >> 4));
+	const int submapper = isNes20 ? (image[8] >> 4) : 0;
+
+	// Submapper 2 of these three boards means "bus conflicts occur"; 1 means
+	// they do not; 0 means the header does not say.
+	//
+	// Only the discrete-logic boards can have them -- MMC1 and MMC3 decode
+	// their registers away from the ROM chip, and mapper 87's register is in
+	// the work-RAM window where no ROM is driving. Claiming conflicts anywhere
+	// else would AND a bank number against a byte that never reached the bus.
+	//
+	// Nothing is inferred from the mapper number alone. A wrong guess does not
+	// fail loudly; it quietly selects the wrong bank, and the header is the
+	// only trustworthy source.
+	const bool busConflicts = (submapper == 2)
+			&& (mapperNumber == 2 || mapperNumber == 3 || mapperNumber == 7);
 
 	// The wired mirroring and the four-screen flag are kept apart: several
 	// mappers switch mirroring at runtime, but a four-screen board carries its
@@ -123,8 +138,12 @@ std::unique_ptr<Cartridge> Cartridge::fromINes(const std::vector<std::uint8_t>& 
 	}
 	}
 
+	mapper->setBusConflicts(busConflicts);
+
 	std::unique_ptr<Cartridge> cart(new Cartridge());
 	cart->m_mapper = std::move(mapper);
+	cart->m_submapper = submapper;
+	cart->m_busConflicts = busConflicts;
 	cart->m_prgSize = prgSize;
 	cart->m_chrSize = chrSize;
 	cart->m_hasBattery = (flags6 & F6_BATTERY) != 0;

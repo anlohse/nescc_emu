@@ -77,6 +77,17 @@ public:
 	virtual bool irqAsserted() const { return false; }
 
 	/**
+	 * Tell the board whether a write to $8000-$FFFF collides with its ROM.
+	 *
+	 * On the discrete-logic boards the bank register is not decoded away from
+	 * the ROM chip, so during a write both the CPU and the ROM drive the data
+	 * bus and the board sees the two values ANDed together. Boards with a
+	 * properly decoded register -- MMC1, MMC3 -- and boards whose register is
+	 * not in ROM space at all ignore this.
+	 */
+	virtual void setBusConflicts(bool /*enabled*/) { }
+
+	/**
 	 * The board's work RAM at $6000-$7FFF, or null when it has none.
 	 *
 	 * Whether this survives a power cycle is not the board's business: the
@@ -121,6 +132,9 @@ public:
 	std::vector<std::uint8_t>* workRam() override { return &m_prgRam; }
 	const std::vector<std::uint8_t>* workRam() const override { return &m_prgRam; }
 
+	void setBusConflicts(bool enabled) override { m_busConflicts = enabled; }
+	bool hasBusConflicts() const { return m_busConflicts; }
+
 protected:
 	/** Byte offset into PRG for a CPU address in $8000-$FFFF. */
 	virtual std::size_t prgOffset(std::uint16_t address) const = 0;
@@ -144,6 +158,7 @@ protected:
 	bool m_chrIsRam;
 	Mirroring m_mirroring;
 	bool m_fourScreen;
+	bool m_busConflicts;
 };
 
 /**

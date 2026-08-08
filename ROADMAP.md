@@ -100,7 +100,10 @@ Roughly in order of how likely a real game is to notice:
   leaving it to guesswork. The APU suite has a specific job waiting for it: the frame
   interrupt currently powers up inhibited, which is a deviation adopted because a real
   game needs it, and only a test ROM can say what the hardware truly does.
-- **Bus conflicts** on UxROM and CNROM, and MMC1's consecutive-write rule.
+- ~~**Bus conflicts** on UxROM and CNROM~~ — done, driven by the NES 2.0 submapper
+  rather than guessed from the mapper number. **MMC1's consecutive-write rule** remains:
+  hardware ignores the second write of a read-modify-write pair because it lands on the
+  very next cycle, and this does not.
 - **The `$2002` read race** — reading exactly as vblank is raised should suppress the
   NMI.
 - **Mid-scanline rendering.** Currently each line is drawn from the scroll state at its

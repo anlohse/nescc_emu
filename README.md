@@ -15,6 +15,7 @@ that keeps the status bar fixed while the level moves beneath it all work.
 | Mappers | 0 NROM, 1 MMC1, 2 UxROM, 3 CNROM, 4 MMC3, 7 AxROM, 87 |
 | Region | NTSC and PAL, read from the header and applied to every clock |
 | Mapper IRQ | MMC3's scanline counter, merged with the APU onto one CPU line |
+| Bus conflicts | on the discrete boards, when the NES 2.0 submapper declares them |
 | CPU bus | RAM + mirroring, PPU/cartridge routing, `peek()` for debuggers |
 | CPU | emu6502, which passes Klaus Dormann's functional test |
 | PPU timing | dot/scanline/frame counters, vblank, NMI, odd-frame dot skip |
@@ -314,9 +315,10 @@ Nyquist folds back down as noise.
   the NES has Start and Select, read on `$4016` bit 2. A few Japanese games use it;
   here those bits read as zero, which is correct for an NES and wrong for a Famicom.
 - **No FDS support** — Famicom Disk System images are a different container entirely.
-- **No bus conflicts.** On UxROM and CNROM the value written to ROM is ANDed with the
-  byte already there, and a few games depend on it. Every board here takes the written
-  value as-is.
+- **Bus conflicts are only applied when the header asks for them.** NES 2.0 submapper 2
+  on UxROM, CNROM and AxROM means the board has them; 1 means it does not; iNES 1.0 has
+  nowhere to say and so is treated as not. Nothing is inferred from the mapper number
+  alone, because a wrong guess does not fail loudly — it quietly selects the wrong bank.
 - **MMC1 accepts consecutive writes.** Hardware ignores the second write of a
   read-modify-write pair, because it arrives on the very next cycle; this does not, so a
   game using `INC $8000` on the register would behave differently.
@@ -383,7 +385,7 @@ view, including the backend-interface design and what would be needed for a 1.0.
    the core currently implements full BCD.
 4. Save states — the console's whole state is a handful of plain structs, so this is
    mostly a serialisation exercise, and it makes debugging the harder games practical.
-5. Bus conflicts on UxROM and CNROM, and MMC1's consecutive-write rule — the accuracy
-   gaps above that a real game is most likely to notice.
+5. MMC1's consecutive-write rule — hardware ignores the second write of a
+   read-modify-write pair, and this does not.
 6. Famicom expansion audio, if a cart that uses it ever turns up. VRC6 is the usual
    first one, and it would mean letting a mapper contribute to the APU's mix.

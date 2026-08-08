@@ -291,10 +291,18 @@ int main(int argc, char** argv) {
 	}
 
 	const nes::Cartridge* cart = console.cartridge();
-	std::fprintf(stderr, "%s: mapper %d, PRG %zu KB, CHR %zu KB, %s mirroring, %s%s%s\n",
-			romPath, cart->mapperNumber(), cart->prgSize() / 1024, cart->chrSize() / 1024,
+	char mapperName[32];
+	if (cart->submapper() != 0)
+		std::snprintf(mapperName, sizeof(mapperName), "%d.%d",
+				cart->mapperNumber(), cart->submapper());
+	else
+		std::snprintf(mapperName, sizeof(mapperName), "%d", cart->mapperNumber());
+
+	std::fprintf(stderr, "%s: mapper %s, PRG %zu KB, CHR %zu KB, %s mirroring, %s%s%s%s\n",
+			romPath, mapperName, cart->prgSize() / 1024, cart->chrSize() / 1024,
 			nes::toString(cart->mirroring()), nes::toString(cart->region()),
-			cart->isNes20() ? ", NES 2.0" : "", cart->hasBattery() ? ", battery" : "");
+			cart->isNes20() ? ", NES 2.0" : "", cart->hasBattery() ? ", battery" : "",
+			cart->hasBusConflicts() ? ", bus conflicts" : "");
 
 	console.reset();
 	if (startPc >= 0)

@@ -56,6 +56,22 @@ public:
 	bool hasBattery() const { return m_hasBattery; }
 	/** True when the image declared NES 2.0 in its header. */
 	bool isNes20() const { return m_isNes20; }
+
+	/**
+	 * NES 2.0 submapper, distinguishing boards that share a mapper number.
+	 * Zero for iNES 1.0 images, which have nowhere to say.
+	 */
+	int submapper() const { return m_submapper; }
+
+	/**
+	 * True when writes to $8000-$FFFF collide with the ROM on this board.
+	 *
+	 * Only claimed when the header says so. The alternative -- guessing from
+	 * the mapper number -- would change how existing games behave on the
+	 * strength of a guess, and a wrong guess here silently selects the wrong
+	 * bank.
+	 */
+	bool hasBusConflicts() const { return m_busConflicts; }
 	/** NTSC unless the header says otherwise. Drives all system timing. */
 	Region region() const { return m_region; }
 
@@ -95,6 +111,8 @@ private:
 	std::size_t m_chrSize = 0;
 	bool m_hasBattery = false;
 	bool m_isNes20 = false;
+	int m_submapper = 0;
+	bool m_busConflicts = false;
 	Region m_region = Region::Ntsc;
 };
 

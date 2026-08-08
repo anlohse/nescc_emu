@@ -151,6 +151,122 @@ TEST_CASE("axrom_selects_the_single_screen") {
 }
 
 /* ------------------------------------------------------------------------ */
+/* Bus conflicts                                                             */
+/* ------------------------------------------------------------------------ */
+
+namespace {
+
+/**
+ * A mapper-3 cartridge whose PRG is stamped in 16 KB units, so the byte at any
+ * address in the low bank is 0 and in the high bank is 1 -- easy to reason
+ * about when checking what a write gets ANDed with.
+ */
+std::unique_ptr<Cartridge> conflictCart(int submapper, std::uint8_t byteAt8000) {
+	testrom::Options o;
+	o.mapper = 3;
+	o.nes20 = true;
+	o.submapper = submapper;
+	o.prgBanks = 2;
+	o.chrBanks = 4;
+
+	std::vector<std::uint8_t> prg(2 * BANK_16K, 0xFF);
+	prg[0] = byteAt8000;                       // the byte at $8000
+	const std::vector<std::uint8_t> chr = stamped(4 * BANK_8K, BANK_8K);
+
+	std::string error;
+	auto cart = Cartridge::fromINes(testrom::build(o, prg, chr), &error);
+	REQUIRE_MESSAGE(cart != nullptr, error);
+	return cart;
+}
+
+} // namespace
+
+TEST_CASE("the_header_decides_whether_a_board_has_bus_conflicts") {
+	CHECK(conflictCart(2, 0xFF)->hasBusConflicts());        // submapper 2: yes
+	CHECK_FALSE(conflictCart(1, 0xFF)->hasBusConflicts());  // submapper 1: no
+	CHECK_FALSE(conflictCart(0, 0xFF)->hasBusConflicts());  // unstated: assume not
+
+	// Nothing is inferred from the mapper number: an iNES 1.0 image of the same
+    // board says nothing, so nothing is claimed.
+	testrom::Options o;
+	o.mapper = 3;
+	auto plain = Cartridge::fromINes(testrom::build(o));
+	REQUIRE(plain != nullptr);
+	CHECK_FALSE(plain->hasBusConflicts());
+	CHECK_EQ(plain->submapper(), 0);
+}
+
+TEST_CASE("a_write_is_anded_with_the_rom_underneath_it") {
+	// Both the CPU and the ROM drive the bus during the write, and a line
+	// pulled low by either side reads low.
+	auto cart = conflictCart(2, 0x01);
+	cart->cpuWrite(0x8000, 0x03);              // 0x03 AND 0x01 = 0x01
+	CHECK_EQ(cart->ppuRead(0x0000), 1);
+
+	// Without the conflict the same write would have selected bank 3.
+	auto clean = conflictCart(1, 0x01);
+	clean->cpuWrite(0x8000, 0x03);
+	CHECK_EQ(clean->ppuRead(0x0000), 3);
+}
+
+TEST_CASE("the_safe_write_idiom_is_unaffected") {
+	// How games written for these boards avoid the problem: write the bank
+	// number to an address that already holds it, so the AND changes nothing.
+	// Ikinari Musician does exactly this -- STA $808B with A = $21, where the
+	// ROM byte at $808B is also $21.
+	auto cart = conflictCart(2, 0x02);
+	cart->cpuWrite(0x8000, 0x02);
+	CHECK_EQ(cart->ppuRead(0x0000), 2);
+}
+
+TEST_CASE("a_write_against_all_ones_passes_through") {
+	auto cart = conflictCart(2, 0xFF);
+	cart->cpuWrite(0x8000, 0x02);
+	CHECK_EQ(cart->ppuRead(0x0000), 2);
+}
+
+TEST_CASE("the_conflict_uses_the_bank_currently_mapped") {
+	// The ROM byte that fights the write is whichever one is visible at that
+	// address right now, not a fixed byte of the image.
+	testrom::Options o;
+	o.mapper = 2;                              // UxROM: the low half switches
+	o.nes20 = true;
+	o.submapper = 2;
+	o.prgBanks = 4;
+	o.chrBanks = 0;
+
+	std::vector<std::uint8_t> prg(4 * BANK_16K, 0xFF);
+	prg[0 * BANK_16K] = 0xFF;                  // bank 0 lets everything through
+	prg[1 * BANK_16K] = 0x01;                  // bank 1 masks all but bit 0
+	auto cart = Cartridge::fromINes(testrom::build(o, prg));
+	REQUIRE(cart != nullptr);
+
+	cart->cpuWrite(0x8000, 0x01);              // 0x01 AND 0xFF -> bank 1
+	REQUIRE_EQ(cart->cpuRead(0x8000), 0x01);   // bank 1 is now mapped low
+
+	// Now the byte at $8000 is 0x01, so a request for bank 3 is masked to 1.
+	cart->cpuWrite(0x8000, 0x03);
+	CHECK_EQ(cart->cpuRead(0x8000), 0x01);     // still bank 1
+}
+
+TEST_CASE("boards_with_decoded_registers_never_conflict") {
+	// MMC1 and MMC3 decode their registers away from the ROM chip, and mapper
+	// 87's register is in the work-RAM window where no ROM is driving. Even a
+	// header claiming submapper 2 must not make those AND anything.
+	for (int mapper : { 1, 4, 87 }) {
+		testrom::Options o;
+		o.mapper = mapper;
+		o.nes20 = true;
+		o.submapper = 2;
+		o.prgBanks = 8;
+		o.chrBanks = 4;
+		auto cart = Cartridge::fromINes(testrom::build(o));
+		REQUIRE(cart != nullptr);
+		CHECK_MESSAGE(!cart->hasBusConflicts(), "mapper ", mapper);
+	}
+}
+
+/* ------------------------------------------------------------------------ */
 /* Mapper 87: a bank register in the work-RAM window                         */
 /* ------------------------------------------------------------------------ */
 

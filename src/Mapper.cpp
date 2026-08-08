@@ -64,7 +64,8 @@ BankedMapper::BankedMapper(std::vector<std::uint8_t> prg, std::vector<std::uint8
 		m_prgRam(PRG_RAM_SIZE, 0),
 		m_chrIsRam(false),
 		m_mirroring(mirroring),
-		m_fourScreen(fourScreen) {
+		m_fourScreen(fourScreen),
+		m_busConflicts(false) {
 
 	if (m_prg.empty())
 		m_prg.resize(BANK_16K, 0);
@@ -90,7 +91,18 @@ void BankedMapper::cpuWrite(std::uint16_t address, std::uint8_t value) {
 	if (address >= PRG_BASE) {
 		// The write cannot land in ROM, but on a banked board the address and
 		// data still reach the mapper's registers.
-		writeRegister(address, value);
+		std::uint8_t effective = value;
+		if (m_busConflicts) {
+			// Both the CPU and the ROM are driving the data bus, and a bus that
+			// is pulled low by either side reads low -- so the board sees the
+			// AND. Games written for these boards avoid the problem by writing
+			// the bank number to an address that already contains it, which
+			// makes the AND a no-op.
+			const std::size_t offset = prgOffset(address);
+			if (offset < m_prg.size())
+				effective = static_cast<std::uint8_t>(value & m_prg[offset]);
+		}
+		writeRegister(address, effective);
 		return;
 	}
 	if (address >= PRG_RAM_LO && address <= PRG_RAM_HI)
