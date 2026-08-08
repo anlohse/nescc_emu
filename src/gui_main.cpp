@@ -5,6 +5,7 @@
 // for tracing and CI; this one owns a frame clock, a keyboard and a texture.
 //
 
+#include "GuiConfig.h"
 #include "nes/Nes.h"
 
 #include <SDL.h>
@@ -12,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -98,6 +100,9 @@ void usage(const char* argv0) {
 		"D-pad or left stick to move; A or B = NES A; X or Y = NES B;\n"
 		"Start = Start, Back = Select. The keyboard keeps working alongside.\n"
 		"\n"
+		"All of the above can be rebound in nes.cfg, written beside this program\n"
+		"on the first run. Options given here override it.\n"
+		"\n"
 		"  P or Space   pause\n"
 		"  N            while paused, advance one frame\n"
 		"  M            mute\n"
@@ -135,28 +140,20 @@ const std::uint8_t BUTTON_BITS[8] = {
 std::uint8_t readKeys(const Uint8* keys, const SDL_Scancode (&map)[8]) {
 	std::uint8_t buttons = 0;
 	for (int i = 0; i < 8; i++)
-		if (keys[map[i]])
+		if (map[i] != SDL_SCANCODE_UNKNOWN && keys[map[i]])
 			buttons |= BUTTON_BITS[i];
 	return buttons;
 }
 
 /** Which button, if any, a key is mapped to. */
 std::uint8_t buttonForKey(SDL_Scancode code, const SDL_Scancode (&map)[8]) {
+	if (code == SDL_SCANCODE_UNKNOWN)
+		return 0;
 	for (int i = 0; i < 8; i++)
 		if (map[i] == code)
 			return BUTTON_BITS[i];
 	return 0;
 }
-
-const SDL_Scancode PLAYER1_KEYS[8] = {
-	SDL_SCANCODE_Z, SDL_SCANCODE_X, SDL_SCANCODE_RSHIFT, SDL_SCANCODE_RETURN,
-	SDL_SCANCODE_UP, SDL_SCANCODE_DOWN, SDL_SCANCODE_LEFT, SDL_SCANCODE_RIGHT
-};
-
-const SDL_Scancode PLAYER2_KEYS[8] = {
-	SDL_SCANCODE_KP_1, SDL_SCANCODE_KP_2, SDL_SCANCODE_KP_PLUS, SDL_SCANCODE_KP_ENTER,
-	SDL_SCANCODE_KP_8, SDL_SCANCODE_KP_5, SDL_SCANCODE_KP_4, SDL_SCANCODE_KP_6
-};
 
 /* ------------------------------------------------------------------------- */
 /* Gamepads                                                                   */
@@ -216,33 +213,26 @@ public:
 		}
 	}
 
-	std::uint8_t read(int port) const {
+	std::uint8_t read(int port, const SDL_GameControllerButton (&map)[8]) const {
 		SDL_GameController* pad = m_pads[port];
 		if (!pad)
 			return 0;
 
-		static const SDL_GameControllerButton MAP[8] = {
-			SDL_CONTROLLER_BUTTON_A,          // NES A
-			SDL_CONTROLLER_BUTTON_X,          // NES B
-			SDL_CONTROLLER_BUTTON_BACK,       // Select
-			SDL_CONTROLLER_BUTTON_START,
-			SDL_CONTROLLER_BUTTON_DPAD_UP,
-			SDL_CONTROLLER_BUTTON_DPAD_DOWN,
-			SDL_CONTROLLER_BUTTON_DPAD_LEFT,
-			SDL_CONTROLLER_BUTTON_DPAD_RIGHT
-		};
-
 		std::uint8_t buttons = 0;
 		for (int i = 0; i < 8; i++)
-			if (SDL_GameControllerGetButton(pad, MAP[i]))
+			if (map[i] != SDL_CONTROLLER_BUTTON_INVALID
+					&& SDL_GameControllerGetButton(pad, map[i]))
 				buttons |= BUTTON_BITS[i];
 
-		// The other diagonal too, so either row of face buttons works. The NES
-		// has two buttons and a modern pad has four; insisting on one pairing
-		// only means half of them feel broken.
-		if (SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_B))
+		// The other face-button diagonal, for whichever of the four the
+		// configuration does not already use. The NES has two buttons and a
+		// modern pad has four; leaving half of them dead feels broken. An
+		// explicit binding always wins, so rebinding cannot collide with this.
+		if (!isBound(map, SDL_CONTROLLER_BUTTON_B)
+				&& SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_B))
 			buttons |= nes::Controller::BUTTON_A;
-		if (SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_Y))
+		if (!isBound(map, SDL_CONTROLLER_BUTTON_Y)
+				&& SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_Y))
 			buttons |= nes::Controller::BUTTON_B;
 
 		// The left stick drives the d-pad as well. Deadzone is generous: this
@@ -266,25 +256,32 @@ public:
 		return -1;
 	}
 
-	static std::uint8_t buttonFor(Uint8 sdlButton) {
-		switch (sdlButton) {
-		case SDL_CONTROLLER_BUTTON_A:
-		case SDL_CONTROLLER_BUTTON_B:          return nes::Controller::BUTTON_A;
-		case SDL_CONTROLLER_BUTTON_X:
-		case SDL_CONTROLLER_BUTTON_Y:          return nes::Controller::BUTTON_B;
-		case SDL_CONTROLLER_BUTTON_BACK:       return nes::Controller::BUTTON_SELECT;
-		case SDL_CONTROLLER_BUTTON_START:      return nes::Controller::BUTTON_START;
-		case SDL_CONTROLLER_BUTTON_DPAD_UP:    return nes::Controller::BUTTON_UP;
-		case SDL_CONTROLLER_BUTTON_DPAD_DOWN:  return nes::Controller::BUTTON_DOWN;
-		case SDL_CONTROLLER_BUTTON_DPAD_LEFT:  return nes::Controller::BUTTON_LEFT;
-		case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: return nes::Controller::BUTTON_RIGHT;
-		default:                               return 0;
+	/** The same mapping as read(), for a single button-down event. */
+	static std::uint8_t buttonFor(Uint8 sdlButton, const SDL_GameControllerButton (&map)[8]) {
+		const SDL_GameControllerButton pressed =
+				static_cast<SDL_GameControllerButton>(sdlButton);
+		std::uint8_t buttons = 0;
+		for (int i = 0; i < 8; i++)
+			if (map[i] == pressed)
+				buttons |= BUTTON_BITS[i];
+		if (!isBound(map, pressed)) {
+			if (pressed == SDL_CONTROLLER_BUTTON_B) buttons |= nes::Controller::BUTTON_A;
+			if (pressed == SDL_CONTROLLER_BUTTON_Y) buttons |= nes::Controller::BUTTON_B;
 		}
+		return buttons;
 	}
 
 	int count() const { return (m_pads[0] ? 1 : 0) + (m_pads[1] ? 1 : 0); }
 
 private:
+	static bool isBound(const SDL_GameControllerButton (&map)[8],
+			SDL_GameControllerButton button) {
+		for (int i = 0; i < 8; i++)
+			if (map[i] == button)
+				return true;
+		return false;
+	}
+
 	static SDL_JoystickID instanceId(SDL_GameController* pad) {
 		return SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(pad));
 	}
@@ -319,9 +316,19 @@ bool saveScreenshot(const std::uint32_t* pixels, int index) {
 
 int main(int argc, char* argv[]) {
 	const char* romPath = nullptr;
-	int scale = 3;
-	bool fullscreen = false;
-	bool wantAudio = true;
+
+	// The file first, then the command line over the top of it: a flag typed
+	// now should beat a preference saved earlier.
+	nesgui::Config config = nesgui::Config::defaults();
+	const std::string configPath = nesgui::Config::path();
+	std::string configWarnings;
+	config.load(configPath, &configWarnings);
+	if (!configWarnings.empty())
+		std::fprintf(stderr, "%s\n", configWarnings.c_str());
+
+	int scale = config.scale;
+	bool fullscreen = config.fullscreen;
+	bool wantAudio = config.audio;
 
 	for (int i = 1; i < argc; i++) {
 		const char* rest = nullptr;
@@ -378,6 +385,16 @@ int main(int argc, char* argv[]) {
 
 	Gamepads gamepads;
 	gamepads.openExisting();
+
+	// Write the file out once SDL is up, so the names in it come from SDL
+	// rather than from a table here that could disagree with it. Doing this
+	// after a successful start also means a config is only ever left behind by
+	// a run that worked.
+	{
+		std::ifstream probe(configPath.c_str());
+		if (!probe && config.save(configPath))
+			SDL_Log("wrote a default configuration to %s", configPath.c_str());
+	}
 
 	SDL_Window* window = SDL_CreateWindow("nes",
 			SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
@@ -489,10 +506,11 @@ int main(int argc, char* argv[]) {
 				// frame must not vanish.
 				const int port = gamepads.portOf(event.cbutton.which);
 				if (port >= 0)
-					tapped[port] |= Gamepads::buttonFor(event.cbutton.button);
+					tapped[port] |= Gamepads::buttonFor(event.cbutton.button,
+							config.padButtons[port]);
 			} else if (event.type == SDL_KEYDOWN && event.key.repeat == 0) {
-				tapped[0] |= buttonForKey(event.key.keysym.scancode, PLAYER1_KEYS);
-				tapped[1] |= buttonForKey(event.key.keysym.scancode, PLAYER2_KEYS);
+				tapped[0] |= buttonForKey(event.key.keysym.scancode, config.keys[0]);
+				tapped[1] |= buttonForKey(event.key.keysym.scancode, config.keys[1]);
 				switch (event.key.keysym.scancode) {
 				case SDL_SCANCODE_ESCAPE:
 					running = false;
@@ -535,10 +553,11 @@ int main(int argc, char* argv[]) {
 		// Keyboard and pad both drive the same port, so a pad can be picked up
 		// mid-game without the keyboard going dead.
 		const Uint8* keys = SDL_GetKeyboardState(nullptr);
-		console.controller(0).setButtons(
-				readKeys(keys, PLAYER1_KEYS) | gamepads.read(0) | tapped[0]);
-		console.controller(1).setButtons(
-				readKeys(keys, PLAYER2_KEYS) | gamepads.read(1) | tapped[1]);
+		for (int port = 0; port < 2; port++)
+			console.controller(port).setButtons(
+					readKeys(keys, config.keys[port])
+					| gamepads.read(port, config.padButtons[port])
+					| tapped[port]);
 
 		// Held Tab runs flat out. The CPU is not the bottleneck -- the frame
 		// clock is -- so this just stops waiting.

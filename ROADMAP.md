@@ -20,8 +20,12 @@ survived being loaded, held through a run, and written back.
 single layout across every common pad, with the keyboard still live alongside. The
 `Controller` class was not touched, which is the point of it.
 
-**Persistent configuration.** Not necessarily a dialog — a config file next to the
-executable would do. Hardcoded key bindings are a 0.x trait.
+**~~Persistent configuration.~~** Done. A portable `nes.cfg` beside the executable,
+written with the defaults on first run, covering key and pad bindings for both ports
+plus window scale, fullscreen and audio. Command-line options override it.
+
+*With those three done, and the repository housekeeping below, everything this section
+called a 1.0 blocker is finished.*
 
 **Repository housekeeping**, because these block a public release rather than a
 feature:
@@ -74,12 +78,12 @@ so the decision stays reversible.
 
 1. **Backend interface**, as above. Everything below plugs into it.
 2. ~~**Gamepad support** via SDL's game-controller API.~~ Done.
-3. **Remapping** — a binding table from a physical input to one of the eight buttons,
-   per port, stored in the config file. The maps in `gui_main.cpp` are already tables
-   rather than switch statements, so this is mostly a matter of filling them from disk.
-4. **A configuration dialog.** SDL alone has no widgets, so this needs either Dear
-   ImGui (small, self-contained, no external toolkit) or a native dialog per platform.
-   ImGui is the pragmatic choice and would also give a debugger UI later.
+3. ~~**Remapping**~~ — done, as a binding table per port in `nes.cfg`.
+4. **A configuration dialog.** Editing a file works, but binding a key by pressing it is
+   what people expect. SDL alone has no widgets, so this needs either Dear ImGui (small,
+   self-contained, no external toolkit) or a native dialog per platform. ImGui is the
+   pragmatic choice and would also give a debugger UI later. `Config` already round-trips
+   through disk, so a dialog would only need to edit the struct and save it.
 5. **The Zapper.** A well-scoped and genuinely fun addition: sample the framebuffer at
    the mouse position for brightness, and report it on `$4017` bit 3 (inverted — the
    bit is *clear* when light is seen) with the trigger on bit 4. Duck Hunt is an NROM

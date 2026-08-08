@@ -91,6 +91,41 @@ Both face-button diagonals are accepted, because the NES has two buttons and a m
 pad has four; binding only one pair makes the other half feel broken. The keyboard stays
 live alongside the pad, so picking one up mid-game does not switch the other off.
 
+### Configuration
+
+Everything above can be rebound. A `nes.cfg` is written beside the executable on the
+first run, already filled in with the defaults, so there is nothing to look up — open it
+and change what you want:
+
+```ini
+[video]
+scale = 3
+fullscreen = false
+
+[keyboard1]
+a = Z
+b = X
+select = Right Shift
+start = Return
+up = Up
+
+[pad1]
+a = a
+b = x
+start = start
+```
+
+It lives beside the program rather than in a user profile directory, so the released zip
+stays portable: unpack it anywhere, take the folder with you, nothing is installed and
+nothing is left behind.
+
+Names are SDL's own — `Right Shift`, `Keypad 8`, `dpup`, `leftshoulder` — because SDL
+converts both directions, so the names it writes are exactly the names it reads back.
+A binding it does not recognise is reported and skipped rather than rejecting the file:
+one typo costs that binding, not the rest of your setup.
+
+Command-line options win over the file. Delete it to get the defaults back.
+
 `P` or `Space` pauses, `N` advances one frame while paused, `M` mutes, holding `Tab`
 runs unthrottled, `R` resets, `F12` saves a screenshot, `Esc` quits. `--scale=N` sets
 the window size, `--fullscreen` starts borderless, `--no-audio` runs silent; the picture
@@ -290,8 +325,8 @@ Nyquist folds back down as noise.
   the last of those.
 - **No save states** — only the cartridge's own battery RAM persists, the same as on
   hardware.
-- **Bindings are fixed.** Gamepads and the keyboard both work, but neither can be
-  remapped and nothing is remembered between runs; that needs a config file.
+- **Rebinding means editing a file.** There is no in-emulator settings screen, which
+  would need a UI toolkit SDL does not provide.
 - **Opposing directions are not filtered.** Real hardware lets Left and Right close
   together and some games glitch when they do; that filtering belongs to whatever
   drives the input, so it is not done in `Controller`.
@@ -330,9 +365,7 @@ copyleft does not reach this code.
 The short list below is the immediate work; [ROADMAP.md](ROADMAP.md) has the longer
 view, including the backend-interface design and what would be needed for a 1.0.
 
-1. **Remappable bindings in a config file**, so the fixed layouts above stop being
-   fixed and survive a restart.
-2. nestest, whenever the ROM is available — still the only thing that would validate
+1. nestest, whenever the ROM is available — still the only thing that would validate
    the undocumented opcodes and exact cycle counts against a reference. The `blargg`
    APU and MMC3 test ROMs are the equivalent gates for sound and for the scanline
    counter, and would settle how much the timing approximations above actually matter.
