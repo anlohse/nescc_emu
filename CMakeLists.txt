@@ -13,20 +13,35 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 # ------------------------------------------------------------------------------
 # The 6502 core
 # ------------------------------------------------------------------------------
-# Consumed from a sibling checkout by default. add_subdirectory() rather than a
-# package so that editing the core rebuilds this too -- the NES work is expected
-# to keep surfacing changes there (a decimal-mode switch for the 2A03, an OAM DMA
-# stall). Its tests and debugger stay off; build them from that project directly.
+# A sibling checkout is preferred, and fetched from git when there is not one.
+#
+# add_subdirectory() rather than find_package() so that editing the core rebuilds
+# this too -- the NES work keeps surfacing changes there. The fetch fallback is
+# what makes a plain "git clone && cmake" work for someone who only wants this
+# repository; developing against a local core still just works, because the
+# sibling directory wins whenever it exists. Its tests and debugger stay off.
 set(EMU6502_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../emu6502" CACHE PATH
-    "Path to the emu6502 checkout")
+    "Path to a local emu6502 checkout; fetched from git if this does not exist")
+set(EMU6502_GIT_REPOSITORY "https://github.com/alanlohse/emu6502cc.git" CACHE STRING
+    "Where to fetch the 6502 core when no local checkout is present")
+set(EMU6502_GIT_TAG "master" CACHE STRING
+    "Branch or tag of the 6502 core to fetch")
 
-if(NOT EXISTS "${EMU6502_DIR}/CMakeLists.txt")
-    message(FATAL_ERROR
-        "emu6502 not found at ${EMU6502_DIR}. "
-        "Check it out beside this directory, or pass -DEMU6502_DIR=<path>.")
+if(EXISTS "${EMU6502_DIR}/CMakeLists.txt")
+    message(STATUS "Using the emu6502 checkout at ${EMU6502_DIR}")
+    add_subdirectory("${EMU6502_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/emu6502")
+else()
+    message(STATUS "No emu6502 checkout at ${EMU6502_DIR}; fetching from "
+                   "${EMU6502_GIT_REPOSITORY}")
+    include(FetchContent)
+    FetchContent_Declare(
+        emu6502
+        GIT_REPOSITORY "${EMU6502_GIT_REPOSITORY}"
+        GIT_TAG "${EMU6502_GIT_TAG}"
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(emu6502)
 endif()
-
-add_subdirectory("${EMU6502_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/emu6502")
 
 # ------------------------------------------------------------------------------
 # Console library

@@ -36,8 +36,8 @@ that keeps the status bar fixed while the level moves beneath it all work.
 
 ```
 include/nes/     public headers
-src/             Cartridge (iNES), Mapper (NROM), Ppu, Apu, Controller, NesBus, Nes
-                 main.cpp (headless runner), gui_main.cpp (SDL2 window)
+src/             Cartridge (iNES), Mapper (seven boards), Ppu, Apu, Controller,
+                 NesBus, Nes, main.cpp (headless runner), gui_main.cpp (SDL2 window)
 test_src/        doctest suite, including the nestest harness
 ```
 
@@ -47,8 +47,10 @@ test_src/        doctest suite, including the nestest harness
 cmake -S . -B build && cmake --build build --config Release
 ```
 
-The 6502 core is pulled in from a sibling checkout with `add_subdirectory`. If it lives
-elsewhere:
+That is all it takes from a fresh clone. The 6502 core is used from a sibling checkout
+when one exists, and fetched from git when it does not — so cloning only this repository
+works, and developing against a local core alongside it also works, with the local copy
+winning. To point at a checkout somewhere else:
 
 ```bash
 cmake -S . -B build -DEMU6502_DIR=/path/to/emu6502
@@ -294,7 +296,22 @@ Nyquist folds back down as noise.
 - **OAM DMA always charges 513 cycles**; hardware charges 514 when the write lands on
   an odd CPU cycle, which nothing tracks yet.
 
+## Licence
+
+MIT — see [LICENSE](LICENSE).
+
+No ROMs are included and none are downloaded. `roms/` is ignored, and the two test
+suites that need external images (nestest, and Klaus Dormann's 6502 functional test)
+report themselves as skipped when the files are absent.
+
+The functional test is GPL-3.0-or-later. CMake **fetches** it at configure time and
+never vendors it, so nothing in this repository is a derivative work of it and its
+copyleft does not reach this code.
+
 ## Next
+
+The short list below is the immediate work; [ROADMAP.md](ROADMAP.md) has the longer
+view, including the backend-interface design and what would be needed for a 1.0.
 
 1. **Battery-backed saves.** Zelda has a save chip and nothing keeps it: the `.sav`
    file is a straight dump of the cartridge's work RAM, so this is small and immediately
