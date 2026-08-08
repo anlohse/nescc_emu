@@ -94,6 +94,10 @@ void usage(const char* argv0) {
 		"Player 2: numpad 8456, Numpad 1 = A, Numpad 2 = B,\n"
 		"          Numpad Enter = Start, Numpad + = Select\n"
 		"\n"
+		"Gamepads are picked up automatically, in the order they are plugged in.\n"
+		"D-pad or left stick to move; A or B = NES A; X or Y = NES B;\n"
+		"Start = Start, Back = Select. The keyboard keeps working alongside.\n"
+		"\n"
 		"  P or Space   pause\n"
 		"  N            while paused, advance one frame\n"
 		"  M            mute\n"
@@ -152,6 +156,140 @@ const SDL_Scancode PLAYER1_KEYS[8] = {
 const SDL_Scancode PLAYER2_KEYS[8] = {
 	SDL_SCANCODE_KP_1, SDL_SCANCODE_KP_2, SDL_SCANCODE_KP_PLUS, SDL_SCANCODE_KP_ENTER,
 	SDL_SCANCODE_KP_8, SDL_SCANCODE_KP_5, SDL_SCANCODE_KP_4, SDL_SCANCODE_KP_6
+};
+
+/* ------------------------------------------------------------------------- */
+/* Gamepads                                                                   */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Gamepads for the two ports, filled in the order they are plugged in.
+ *
+ * SDL's game-controller API rather than its raw joystick API: it maps whatever
+ * is plugged in onto one standard layout, so an Xbox pad, a DualShock and a
+ * generic USB pad all arrive here already agreeing on which button is which.
+ * The joystick API would leave that mapping as this program's problem.
+ */
+class Gamepads {
+public:
+	Gamepads() : m_pads() { }
+
+	~Gamepads() {
+		for (SDL_GameController*& pad : m_pads)
+			if (pad) {
+				SDL_GameControllerClose(pad);
+				pad = nullptr;
+			}
+	}
+
+	/** Adopt anything already plugged in when we started. */
+	void openExisting() {
+		for (int i = 0; i < SDL_NumJoysticks(); i++)
+			if (SDL_IsGameController(i))
+				add(i);
+	}
+
+	/** A pad was plugged in. @p index is a device index, not a port. */
+	void add(int index) {
+		if (!SDL_IsGameController(index))
+			return;
+		for (int port = 0; port < 2; port++) {
+			if (m_pads[port])
+				continue;
+			m_pads[port] = SDL_GameControllerOpen(index);
+			if (m_pads[port])
+				SDL_Log("gamepad on port %d: %s", port + 1,
+						SDL_GameControllerName(m_pads[port]));
+			return;
+		}
+		// More than two pads: the console only has two ports.
+	}
+
+	/** A pad was unplugged. @p id is an instance id, which survives reordering. */
+	void remove(SDL_JoystickID id) {
+		for (int port = 0; port < 2; port++) {
+			if (!m_pads[port] || instanceId(m_pads[port]) != id)
+				continue;
+			SDL_GameControllerClose(m_pads[port]);
+			m_pads[port] = nullptr;
+			SDL_Log("gamepad removed from port %d", port + 1);
+		}
+	}
+
+	std::uint8_t read(int port) const {
+		SDL_GameController* pad = m_pads[port];
+		if (!pad)
+			return 0;
+
+		static const SDL_GameControllerButton MAP[8] = {
+			SDL_CONTROLLER_BUTTON_A,          // NES A
+			SDL_CONTROLLER_BUTTON_X,          // NES B
+			SDL_CONTROLLER_BUTTON_BACK,       // Select
+			SDL_CONTROLLER_BUTTON_START,
+			SDL_CONTROLLER_BUTTON_DPAD_UP,
+			SDL_CONTROLLER_BUTTON_DPAD_DOWN,
+			SDL_CONTROLLER_BUTTON_DPAD_LEFT,
+			SDL_CONTROLLER_BUTTON_DPAD_RIGHT
+		};
+
+		std::uint8_t buttons = 0;
+		for (int i = 0; i < 8; i++)
+			if (SDL_GameControllerGetButton(pad, MAP[i]))
+				buttons |= BUTTON_BITS[i];
+
+		// The other diagonal too, so either row of face buttons works. The NES
+		// has two buttons and a modern pad has four; insisting on one pairing
+		// only means half of them feel broken.
+		if (SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_B))
+			buttons |= nes::Controller::BUTTON_A;
+		if (SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_Y))
+			buttons |= nes::Controller::BUTTON_B;
+
+		// The left stick drives the d-pad as well. Deadzone is generous: this
+		// is a digital pad underneath, so precision buys nothing and drift on a
+		// worn stick would be read as a held direction.
+		const int DEADZONE = 12000;
+		const int x = SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_LEFTX);
+		const int y = SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_LEFTY);
+		if (x < -DEADZONE) buttons |= nes::Controller::BUTTON_LEFT;
+		if (x >  DEADZONE) buttons |= nes::Controller::BUTTON_RIGHT;
+		if (y < -DEADZONE) buttons |= nes::Controller::BUTTON_UP;
+		if (y >  DEADZONE) buttons |= nes::Controller::BUTTON_DOWN;
+		return buttons;
+	}
+
+	/** Which port a pad is on, or -1. Used to route a button-down event. */
+	int portOf(SDL_JoystickID id) const {
+		for (int port = 0; port < 2; port++)
+			if (m_pads[port] && instanceId(m_pads[port]) == id)
+				return port;
+		return -1;
+	}
+
+	static std::uint8_t buttonFor(Uint8 sdlButton) {
+		switch (sdlButton) {
+		case SDL_CONTROLLER_BUTTON_A:
+		case SDL_CONTROLLER_BUTTON_B:          return nes::Controller::BUTTON_A;
+		case SDL_CONTROLLER_BUTTON_X:
+		case SDL_CONTROLLER_BUTTON_Y:          return nes::Controller::BUTTON_B;
+		case SDL_CONTROLLER_BUTTON_BACK:       return nes::Controller::BUTTON_SELECT;
+		case SDL_CONTROLLER_BUTTON_START:      return nes::Controller::BUTTON_START;
+		case SDL_CONTROLLER_BUTTON_DPAD_UP:    return nes::Controller::BUTTON_UP;
+		case SDL_CONTROLLER_BUTTON_DPAD_DOWN:  return nes::Controller::BUTTON_DOWN;
+		case SDL_CONTROLLER_BUTTON_DPAD_LEFT:  return nes::Controller::BUTTON_LEFT;
+		case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: return nes::Controller::BUTTON_RIGHT;
+		default:                               return 0;
+		}
+	}
+
+	int count() const { return (m_pads[0] ? 1 : 0) + (m_pads[1] ? 1 : 0); }
+
+private:
+	static SDL_JoystickID instanceId(SDL_GameController* pad) {
+		return SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(pad));
+	}
+
+	SDL_GameController* m_pads[2];
 };
 
 /** Expand a frame of NES colour indices into ARGB8888 for the texture. */
@@ -227,15 +365,19 @@ int main(int argc, char* argv[]) {
 	}
 	console.reset();
 
-	// Audio is requested but not required: a machine with no sound device still
-	// gets a working emulator.
-	if (SDL_Init(SDL_INIT_VIDEO | (wantAudio ? SDL_INIT_AUDIO : 0)) != 0) {
+	// Audio and gamepads are both requested but not required: a machine with no
+	// sound device and no pad still gets a working emulator with a keyboard.
+	const Uint32 optional = (wantAudio ? SDL_INIT_AUDIO : 0) | SDL_INIT_GAMECONTROLLER;
+	if (SDL_Init(SDL_INIT_VIDEO | optional) != 0) {
 		if (SDL_Init(SDL_INIT_VIDEO) != 0) {
 			std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
 			return 1;
 		}
 		wantAudio = false;
 	}
+
+	Gamepads gamepads;
+	gamepads.openExisting();
 
 	SDL_Window* window = SDL_CreateWindow("nes",
 			SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
@@ -338,6 +480,16 @@ int main(int argc, char* argv[]) {
 		while (SDL_PollEvent(&event)) {
 			if (event.type == SDL_QUIT) {
 				running = false;
+			} else if (event.type == SDL_CONTROLLERDEVICEADDED) {
+				gamepads.add(event.cdevice.which);
+			} else if (event.type == SDL_CONTROLLERDEVICEREMOVED) {
+				gamepads.remove(event.cdevice.which);
+			} else if (event.type == SDL_CONTROLLERBUTTONDOWN) {
+				// Same reason as the keyboard: a press and release inside one
+				// frame must not vanish.
+				const int port = gamepads.portOf(event.cbutton.which);
+				if (port >= 0)
+					tapped[port] |= Gamepads::buttonFor(event.cbutton.button);
 			} else if (event.type == SDL_KEYDOWN && event.key.repeat == 0) {
 				tapped[0] |= buttonForKey(event.key.keysym.scancode, PLAYER1_KEYS);
 				tapped[1] |= buttonForKey(event.key.keysym.scancode, PLAYER2_KEYS);
@@ -380,9 +532,13 @@ int main(int argc, char* argv[]) {
 			}
 		}
 
+		// Keyboard and pad both drive the same port, so a pad can be picked up
+		// mid-game without the keyboard going dead.
 		const Uint8* keys = SDL_GetKeyboardState(nullptr);
-		console.controller(0).setButtons(readKeys(keys, PLAYER1_KEYS) | tapped[0]);
-		console.controller(1).setButtons(readKeys(keys, PLAYER2_KEYS) | tapped[1]);
+		console.controller(0).setButtons(
+				readKeys(keys, PLAYER1_KEYS) | gamepads.read(0) | tapped[0]);
+		console.controller(1).setButtons(
+				readKeys(keys, PLAYER2_KEYS) | gamepads.read(1) | tapped[1]);
 
 		// Held Tab runs flat out. The CPU is not the bottleneck -- the frame
 		// clock is -- so this just stops waiting.

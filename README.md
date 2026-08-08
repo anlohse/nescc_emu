@@ -76,11 +76,20 @@ cmake -S . -B build -DNES_BUILD_GUI=OFF
 ./build/bin/Release/nes_gui rom.nes --scale=3
 ```
 
-| | Player 1 | Player 2 |
-| --- | --- | --- |
-| D-pad | arrows | numpad 8 4 5 6 |
-| A / B | Z / X | numpad 1 / 2 |
-| Start / Select | Enter / Right Shift | numpad Enter / + |
+| | Player 1 | Player 2 | Gamepad |
+| --- | --- | --- | --- |
+| D-pad | arrows | numpad 8 4 5 6 | d-pad or left stick |
+| A / B | Z / X | numpad 1 / 2 | A or B / X or Y |
+| Start / Select | Enter / Right Shift | numpad Enter / + | Start / Back |
+
+Gamepads are picked up automatically, in the order they are plugged in, and can be
+connected or removed while a game is running. Anything SDL recognises works — an Xbox
+pad, a DualShock, a generic USB pad — because SDL's game-controller layer maps them all
+onto one layout before this code sees them.
+
+Both face-button diagonals are accepted, because the NES has two buttons and a modern
+pad has four; binding only one pair makes the other half feel broken. The keyboard stays
+live alongside the pad, so picking one up mid-game does not switch the other off.
 
 `P` or `Space` pauses, `N` advances one frame while paused, `M` mutes, holding `Tab`
 runs unthrottled, `R` resets, `F12` saves a screenshot, `Esc` quits. `--scale=N` sets
@@ -281,8 +290,8 @@ Nyquist folds back down as noise.
   the last of those.
 - **No save states** — only the cartridge's own battery RAM persists, the same as on
   hardware.
-- **No gamepad support** — keyboard only. SDL's game-controller API would be a small
-  addition on top of `Controller`.
+- **Bindings are fixed.** Gamepads and the keyboard both work, but neither can be
+  remapped and nothing is remembered between runs; that needs a config file.
 - **Opposing directions are not filtered.** Real hardware lets Left and Right close
   together and some games glitch when they do; that filtering belongs to whatever
   drives the input, so it is not done in `Controller`.
@@ -321,8 +330,8 @@ copyleft does not reach this code.
 The short list below is the immediate work; [ROADMAP.md](ROADMAP.md) has the longer
 view, including the backend-interface design and what would be needed for a 1.0.
 
-1. **Gamepad support**, then remappable bindings in a config file. Keyboard-only is the
-   roughest remaining edge for anyone who just wants to play.
+1. **Remappable bindings in a config file**, so the fixed layouts above stop being
+   fixed and survive a restart.
 2. nestest, whenever the ROM is available — still the only thing that would validate
    the undocumented opcodes and exact cycle counts against a reference. The `blargg`
    APU and MMC3 test ROMs are the equivalent gates for sound and for the scanline

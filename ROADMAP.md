@@ -16,9 +16,9 @@ difference between a technically impressive emulator and one somebody can use.
 on exit and reset. Verified end to end against Zelda: a sentinel planted in the file
 survived being loaded, held through a run, and written back.
 
-**Gamepad support.** Keyboard-only is a rough first impression for a console emulator.
-SDL's game-controller API handles discovery, hot-plug and button naming across every
-common pad, and it maps onto the existing `Controller` class without touching it.
+**~~Gamepad support.~~** Done, via SDL's game-controller API — discovery, hot-plug and a
+single layout across every common pad, with the keyboard still live alongside. The
+`Controller` class was not touched, which is the point of it.
 
 **Persistent configuration.** Not necessarily a dialog — a config file next to the
 executable would do. Hardcoded key bindings are a 0.x trait.
@@ -73,9 +73,10 @@ so the decision stays reversible.
 ## Input, properly
 
 1. **Backend interface**, as above. Everything below plugs into it.
-2. **Gamepad support** via SDL's game-controller API.
+2. ~~**Gamepad support** via SDL's game-controller API.~~ Done.
 3. **Remapping** — a binding table from a physical input to one of the eight buttons,
-   per port, stored in the config file.
+   per port, stored in the config file. The maps in `gui_main.cpp` are already tables
+   rather than switch statements, so this is mostly a matter of filling them from disk.
 4. **A configuration dialog.** SDL alone has no widgets, so this needs either Dear
    ImGui (small, self-contained, no external toolkit) or a native dialog per platform.
    ImGui is the pragmatic choice and would also give a debugger UI later.
