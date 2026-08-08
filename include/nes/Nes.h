@@ -36,8 +36,23 @@ public:
 	Nes(const Nes&) = delete;
 	Nes& operator=(const Nes&) = delete;
 
-	/** Load a .nes file. @return false on failure, with a reason in @p error. */
+	/**
+	 * Load a .nes file, and its save RAM if the cartridge has a battery.
+	 * @return false on failure, with a reason in @p error.
+	 */
 	bool loadRom(const std::string& path, std::string* error = nullptr);
+
+	/**
+	 * Write save RAM back beside the ROM.
+	 *
+	 * Does nothing, successfully, for a cartridge with no battery or one that
+	 * was not loaded from a file. Front-ends should call this on exit and after
+	 * a reset -- a player who closes the window expects to keep their game.
+	 */
+	bool saveBatteryRam(std::string* error = nullptr) const;
+
+	/** Where saveBatteryRam() writes, or empty when there is nothing to write. */
+	const std::string& batteryRamPath() const { return m_savePath; }
 	void setCartridge(std::unique_ptr<Cartridge> cartridge);
 	bool hasCartridge() const { return m_cartridge != nullptr; }
 
@@ -93,6 +108,9 @@ private:
 	std::unique_ptr<NesBus> m_bus;
 	default_clock m_clock;
 	std::unique_ptr<Processor> m_cpu;
+
+	// Empty unless the cartridge came from a file and has a battery.
+	std::string m_savePath;
 
 	Region m_region;
 	// PPU dots per CPU cycle as a fraction: 3/1 on NTSC, 16/5 on PAL. PAL's

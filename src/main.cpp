@@ -419,6 +419,12 @@ int main(int argc, char** argv) {
 			std::fprintf(stderr, "could not write %s\n", screenshot);
 	}
 
+	std::string saveError;
+	if (!console.saveBatteryRam(&saveError))
+		std::fprintf(stderr, "%s\n", saveError.c_str());
+	else if (!console.batteryRamPath().empty())
+		std::fprintf(stderr, "wrote %s\n", console.batteryRamPath().c_str());
+
 	if (audioPath) {
 		if (recorder.write(audioPath))
 			std::fprintf(stderr, "wrote %s (%.2f seconds)\n", audioPath,

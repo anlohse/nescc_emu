@@ -1,5 +1,6 @@
 #include "nes/Cartridge.h"
 
+#include <algorithm>
 #include <fstream>
 #include <sstream>
 
@@ -130,6 +131,62 @@ std::unique_ptr<Cartridge> Cartridge::fromINes(const std::vector<std::uint8_t>& 
 	cart->m_isNes20 = isNes20;
 	cart->m_region = region;
 	return cart;
+}
+
+bool Cartridge::hasPersistentRam() const {
+	const std::vector<std::uint8_t>* ram = m_mapper ? m_mapper->workRam() : nullptr;
+	return m_hasBattery && ram != nullptr && !ram->empty();
+}
+
+std::string Cartridge::batteryRamPathFor(const std::string& romPath) {
+	// Replace the extension, but only when it belongs to the filename -- a dot
+	// in a parent directory must not be mistaken for one.
+	const std::size_t slash = romPath.find_last_of("/\\");
+	const std::size_t dot = romPath.find_last_of('.');
+	if (dot != std::string::npos && (slash == std::string::npos || dot > slash))
+		return romPath.substr(0, dot) + ".sav";
+	return romPath + ".sav";
+}
+
+bool Cartridge::loadBatteryRam(const std::string& path, std::string* error) {
+	if (!hasPersistentRam())
+		return true;
+
+	std::ifstream is(path.c_str(), std::ifstream::binary);
+	if (!is)
+		return true;   // no save yet; that is what a first run looks like
+
+	std::vector<std::uint8_t> data((std::istreambuf_iterator<char>(is)),
+			std::istreambuf_iterator<char>());
+	if (is.bad()) {
+		fail(error, "could not read " + path);
+		return false;
+	}
+
+	std::vector<std::uint8_t>* ram = m_mapper->workRam();
+	const std::size_t count = data.size() < ram->size() ? data.size() : ram->size();
+	std::copy(data.begin(), data.begin() + static_cast<std::ptrdiff_t>(count), ram->begin());
+	return true;
+}
+
+bool Cartridge::saveBatteryRam(const std::string& path, std::string* error) const {
+	if (!hasPersistentRam())
+		return true;
+
+	std::ofstream os(path.c_str(), std::ofstream::binary | std::ofstream::trunc);
+	if (!os) {
+		fail(error, "could not open " + path + " for writing");
+		return false;
+	}
+
+	const std::vector<std::uint8_t>* ram = m_mapper->workRam();
+	os.write(reinterpret_cast<const char*>(ram->data()),
+			static_cast<std::streamsize>(ram->size()));
+	if (!os) {
+		fail(error, "could not write " + path);
+		return false;
+	}
+	return true;
 }
 
 std::unique_ptr<Cartridge> Cartridge::fromFile(const std::string& path, std::string* error) {

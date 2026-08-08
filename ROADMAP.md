@@ -12,12 +12,9 @@ entirely the layer between that core and a person holding a controller.
 Three things a player hits in the first hour. None is large; together they are the
 difference between a technically impressive emulator and one somebody can use.
 
-**Battery-backed saves.** The Legend of Zelda has a save chip and we throw it away when
-the window closes. Anyone who plays for an hour and loses their file will report it as
-the first bug. The `.sav` file is a straight dump of the cartridge's work RAM, written
-on exit and loaded on startup when the header's battery bit is set — an afternoon at
-most, and it is the only item here that is arguably a release blocker rather than a
-nice-to-have.
+**~~Battery-backed saves.~~** Done. A `.sav` beside the ROM, loaded on start and written
+on exit and reset. Verified end to end against Zelda: a sentinel planted in the file
+survived being loaded, held through a run, and written back.
 
 **Gamepad support.** Keyboard-only is a rough first impression for a console emulator.
 SDL's game-controller API handles discovery, hot-plug and button naming across every

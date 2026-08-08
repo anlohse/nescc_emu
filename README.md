@@ -26,6 +26,7 @@ that keeps the status bar fixed while the level moves beneath it all work.
 | Sprite-zero hit | reported at the dot of overlap, so mid-frame splits work |
 | OAM DMA (`$4014`) | copies the page and stalls the CPU 513 cycles |
 | Controllers (`$4016/$4017`) | both ports, latch and shift register, open bus in the high bits |
+| Battery saves | `.sav` beside the ROM, loaded on start, written on exit and reset |
 | APU channels | two pulses with sweep, triangle, noise, DMC — all five |
 | APU frame counter | 4- and 5-step sequences, quarter/half clocks, frame IRQ |
 | APU mixing | the hardware's nonlinear curve, high-pass and anti-alias filtering |
@@ -93,6 +94,10 @@ resampling ratio is nudged by a few parts in a thousand depending on how much au
 queued: too little starves the device into crackling, too much turns into latency. The
 correction is far below the threshold of hearing and holds the two together
 indefinitely.
+
+A cartridge with a save chip keeps its data in a `.sav` file beside the ROM, written
+when you close the window or press `R` and read back the next time you load it. Nothing
+asks: a game that saves, saves.
 
 The title bar shows the real frame rate, which should read `60.1 fps` — NTSC is
 60.0988 Hz, not 60. The pacing is an absolute deadline advanced by exactly one frame
@@ -271,8 +276,11 @@ Nyquist folds back down as noise.
 - **MMC1 accepts consecutive writes.** Hardware ignores the second write of a
   read-modify-write pair, because it arrives on the very next cycle; this does not, so a
   game using `INC $8000` on the register would behave differently.
-- **No save states, no battery-backed save files**, so a game with a save chip cannot
-  keep one.
+- **Saves are written on exit and on reset, not continuously.** Closing the window or
+  pressing `R` keeps your game; killing the process loses whatever was written since
+  the last of those.
+- **No save states** — only the cartridge's own battery RAM persists, the same as on
+  hardware.
 - **No gamepad support** — keyboard only. SDL's game-controller API would be a small
   addition on top of `Controller`.
 - **Opposing directions are not filtered.** Real hardware lets Left and Right close
@@ -313,9 +321,8 @@ copyleft does not reach this code.
 The short list below is the immediate work; [ROADMAP.md](ROADMAP.md) has the longer
 view, including the backend-interface design and what would be needed for a 1.0.
 
-1. **Battery-backed saves.** Zelda has a save chip and nothing keeps it: the `.sav`
-   file is a straight dump of the cartridge's work RAM, so this is small and immediately
-   visible to anyone actually playing.
+1. **Gamepad support**, then remappable bindings in a config file. Keyboard-only is the
+   roughest remaining edge for anyone who just wants to play.
 2. nestest, whenever the ROM is available — still the only thing that would validate
    the undocumented opcodes and exact cycle counts against a reference. The `blargg`
    APU and MMC3 test ROMs are the equivalent gates for sound and for the scanline

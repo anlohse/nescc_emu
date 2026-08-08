@@ -124,6 +124,7 @@ if(NES_BUILD_TESTS)
         test_src/testMain.cpp
         test_src/testCartridge.cpp
         test_src/testApu.cpp
+        test_src/testBatteryRam.cpp
         test_src/testBus.cpp
         test_src/testController.cpp
         test_src/testMappers.cpp

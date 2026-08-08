@@ -358,6 +358,10 @@ int main(int argc, char* argv[]) {
 						SDL_ClearQueuedAudio(audioDevice);
 					break;
 				case SDL_SCANCODE_R:
+					// Save before resetting: the game is about to lose whatever
+					// was in its work RAM, and a player pressing reset does not
+					// expect that to cost them their file.
+					console.saveBatteryRam();
 					console.reset();
 					if (audioDevice) {
 						// A reset silences the APU mid-note; whatever is queued
@@ -456,6 +460,13 @@ int main(int argc, char* argv[]) {
 			fpsMark = now;
 		}
 	}
+
+	// Before tearing anything down: closing the window must not cost a save.
+	std::string saveError;
+	if (!console.saveBatteryRam(&saveError))
+		std::fprintf(stderr, "%s\n", saveError.c_str());
+	else if (!console.batteryRamPath().empty())
+		SDL_Log("wrote %s", console.batteryRamPath().c_str());
 
 	if (audioDevice)
 		SDL_CloseAudioDevice(audioDevice);

@@ -76,6 +76,16 @@ public:
 	 */
 	virtual bool irqAsserted() const { return false; }
 
+	/**
+	 * The board's work RAM at $6000-$7FFF, or null when it has none.
+	 *
+	 * Whether this survives a power cycle is not the board's business: the
+	 * header's battery bit decides that, and Cartridge owns the decision. All
+	 * this does is say which bytes there are to keep.
+	 */
+	virtual std::vector<std::uint8_t>* workRam() { return nullptr; }
+	virtual const std::vector<std::uint8_t>* workRam() const { return nullptr; }
+
 	/** iNES mapper number. */
 	virtual int number() const = 0;
 };
@@ -107,6 +117,9 @@ public:
 
 	/** True when the board has no CHR ROM and the PPU is writing to RAM. */
 	bool hasChrRam() const { return m_chrIsRam; }
+
+	std::vector<std::uint8_t>* workRam() override { return &m_prgRam; }
+	const std::vector<std::uint8_t>* workRam() const override { return &m_prgRam; }
 
 protected:
 	/** Byte offset into PRG for a CPU address in $8000-$FFFF. */

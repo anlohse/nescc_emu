@@ -20,8 +20,25 @@ bool Nes::loadRom(const std::string& path, std::string* error) {
 	std::unique_ptr<Cartridge> cart = Cartridge::fromFile(path, error);
 	if (!cart)
 		return false;
+
 	setCartridge(std::move(cart));
+
+	if (m_cartridge->hasPersistentRam()) {
+		m_savePath = Cartridge::batteryRamPathFor(path);
+		// A missing save is the normal first run, so a failure here is only
+		// ever a real read error -- worth reporting, not worth refusing to
+		// start over.
+		m_cartridge->loadBatteryRam(m_savePath, error);
+	} else {
+		m_savePath.clear();
+	}
 	return true;
+}
+
+bool Nes::saveBatteryRam(std::string* error) const {
+	if (!m_cartridge || m_savePath.empty())
+		return true;
+	return m_cartridge->saveBatteryRam(m_savePath, error);
 }
 
 void Nes::setCartridge(std::unique_ptr<Cartridge> cartridge) {

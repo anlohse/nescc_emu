@@ -59,6 +59,34 @@ public:
 	/** NTSC unless the header says otherwise. Drives all system timing. */
 	Region region() const { return m_region; }
 
+	/**
+	 * True when this cartridge has RAM that a battery kept between sessions.
+	 *
+	 * Needs both halves to be true: the header has to declare a battery, and
+	 * the board has to have work RAM for it to have been wired to.
+	 */
+	bool hasPersistentRam() const;
+
+	/**
+	 * Read save RAM back from @p path.
+	 *
+	 * A missing file is not an error -- it is what the first run looks like.
+	 * A file of the wrong length is loaded as far as it goes rather than
+	 * rejected, because a truncated save is still better than none.
+	 *
+	 * @return false only when the file exists and could not be read.
+	 */
+	bool loadBatteryRam(const std::string& path, std::string* error = nullptr);
+
+	/**
+	 * Write save RAM to @p path. Does nothing, successfully, when the
+	 * cartridge has no battery.
+	 */
+	bool saveBatteryRam(const std::string& path, std::string* error = nullptr) const;
+
+	/** The conventional save path for a ROM: the same name, ending in .sav. */
+	static std::string batteryRamPathFor(const std::string& romPath);
+
 private:
 	Cartridge() = default;
 
