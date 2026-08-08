@@ -2,6 +2,7 @@
 #define NES_CARTRIDGE_H
 
 #include "Mapper.h"
+#include "Region.h"
 
 #include <cstdint>
 #include <memory>
@@ -43,6 +44,11 @@ public:
 	int mapperNumber() const { return m_mapper->number(); }
 	Mapper& mapper() { return *m_mapper; }
 
+	/** Tell the board a scanline's pattern fetches happened. Drives MMC3's IRQ. */
+	void ppuScanline() { m_mapper->ppuScanline(); }
+	/** True while the board is holding the CPU's IRQ line down. */
+	bool irqAsserted() const { return m_mapper->irqAsserted(); }
+
 	/** Program ROM size in bytes, as declared by the header. */
 	std::size_t prgSize() const { return m_prgSize; }
 	/** Character ROM size in bytes; 0 means the board carries CHR RAM instead. */
@@ -50,6 +56,8 @@ public:
 	bool hasBattery() const { return m_hasBattery; }
 	/** True when the image declared NES 2.0 in its header. */
 	bool isNes20() const { return m_isNes20; }
+	/** NTSC unless the header says otherwise. Drives all system timing. */
+	Region region() const { return m_region; }
 
 private:
 	Cartridge() = default;
@@ -59,6 +67,7 @@ private:
 	std::size_t m_chrSize = 0;
 	bool m_hasBattery = false;
 	bool m_isNes20 = false;
+	Region m_region = Region::Ntsc;
 };
 
 } // namespace nes

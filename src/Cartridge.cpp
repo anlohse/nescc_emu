@@ -67,10 +67,24 @@ std::unique_ptr<Cartridge> Cartridge::fromINes(const std::vector<std::uint8_t>& 
 
 	const int mapperNumber = ((flags7 & 0xF0) | (flags6 >> 4));
 
-	Mirroring mirroring = (flags6 & F6_MIRROR_VERTICAL)
+	// The wired mirroring and the four-screen flag are kept apart: several
+	// mappers switch mirroring at runtime, but a four-screen board carries its
+	// own extra VRAM and overrides whatever the mapper asks for.
+	const Mirroring mirroring = (flags6 & F6_MIRROR_VERTICAL)
 			? Mirroring::Vertical : Mirroring::Horizontal;
-	if (flags6 & F6_FOUR_SCREEN)
-		mirroring = Mirroring::FourScreen;
+	const bool fourScreen = (flags6 & F6_FOUR_SCREEN) != 0;
+
+	// NES 2.0 states the timing outright in byte 12; iNES 1.0 has only bit 0 of
+	// byte 9, which plenty of dumps leave at zero even for PAL images. Dendy is
+	// a PAL-region clone and uses PAL video timing, so it lands here too.
+	Region region = Region::Ntsc;
+	if (isNes20) {
+		const int timing = image[12] & 0x03;
+		if (timing == 1 || timing == 3)
+			region = Region::Pal;
+	} else if (image[9] & 0x01) {
+		region = Region::Pal;
+	}
 
 	std::vector<std::uint8_t> prg(image.begin() + offset, image.begin() + offset + prgSize);
 	std::vector<std::uint8_t> chr(image.begin() + offset + prgSize,
@@ -79,11 +93,30 @@ std::unique_ptr<Cartridge> Cartridge::fromINes(const std::vector<std::uint8_t>& 
 	std::unique_ptr<Mapper> mapper;
 	switch (mapperNumber) {
 	case 0:
-		mapper.reset(new NromMapper(std::move(prg), std::move(chr), mirroring));
+		mapper.reset(new NromMapper(std::move(prg), std::move(chr), mirroring, fourScreen));
+		break;
+	case 1:
+		mapper.reset(new Mmc1Mapper(std::move(prg), std::move(chr), mirroring, fourScreen));
+		break;
+	case 2:
+		mapper.reset(new UxRomMapper(std::move(prg), std::move(chr), mirroring, fourScreen));
+		break;
+	case 3:
+		mapper.reset(new CnRomMapper(std::move(prg), std::move(chr), mirroring, fourScreen));
+		break;
+	case 4:
+		mapper.reset(new Mmc3Mapper(std::move(prg), std::move(chr), mirroring, fourScreen));
+		break;
+	case 7:
+		mapper.reset(new AxRomMapper(std::move(prg), std::move(chr), mirroring, fourScreen));
+		break;
+	case 87:
+		mapper.reset(new Mapper87(std::move(prg), std::move(chr), mirroring, fourScreen));
 		break;
 	default: {
 		std::ostringstream os;
-		os << "unsupported mapper " << mapperNumber << " (only 0/NROM is implemented)";
+		os << "unsupported mapper " << mapperNumber
+		   << " (implemented: 0 NROM, 1 MMC1, 2 UxROM, 3 CNROM, 4 MMC3, 7 AxROM, 87)";
 		fail(error, os.str());
 		return nullptr;
 	}
@@ -95,6 +128,7 @@ std::unique_ptr<Cartridge> Cartridge::fromINes(const std::vector<std::uint8_t>& 
 	cart->m_chrSize = chrSize;
 	cart->m_hasBattery = (flags6 & F6_BATTERY) != 0;
 	cart->m_isNes20 = isNes20;
+	cart->m_region = region;
 	return cart;
 }
 

@@ -27,7 +27,16 @@ Ppu::Ppu(Cartridge* cartridge) : m_cartridge(cartridge) {
 	m_palette.fill(0);
 	m_oam.fill(0);
 	m_framebuffer.fill(0);
+	setRegion(Region::Ntsc);
 	reset();
+}
+
+void Ppu::setRegion(Region region) {
+	m_region = region;
+	m_scanlinesPerFrame = (region == Region::Pal)
+			? PAL_SCANLINES_PER_FRAME : SCANLINES_PER_FRAME;
+	m_preRenderScanline = (region == Region::Pal)
+			? PAL_PRE_RENDER_SCANLINE : PRE_RENDER_SCANLINE;
 }
 
 void Ppu::reset() {
@@ -61,24 +70,27 @@ void Ppu::tickOne() {
 	// Advance first, then do the work belonging to the dot just reached. After
 	// tick(n) the PPU is at dot n and everything scheduled for it has happened.
 	m_dot++;
-	if (m_scanline == PRE_RENDER_SCANLINE && m_dot == DOTS_PER_SCANLINE - 1
+	if (m_region == Region::Ntsc && m_scanline == m_preRenderScanline
+			&& m_dot == DOTS_PER_SCANLINE - 1
 			&& (m_frame & 1) && renderingEnabled()) {
 		// With rendering on, odd frames drop the last dot of the pre-render
-		// line. That one-dot difference keeps the NTSC colour phase aligned.
+		// line. That one-dot difference keeps the NTSC colour phase aligned --
+		// and PAL, whose colour carrier does not divide the same way, has no
+		// such skip.
 		m_dot = 0;
 		m_scanline = 0;
 		m_frame++;
 	} else if (m_dot >= DOTS_PER_SCANLINE) {
 		m_dot = 0;
 		m_scanline++;
-		if (m_scanline >= SCANLINES_PER_FRAME) {
+		if (m_scanline >= m_scanlinesPerFrame) {
 			m_scanline = 0;
 			m_frame++;
 		}
 	}
 
 	const bool visible = m_scanline < SCREEN_HEIGHT;
-	const bool preRender = m_scanline == PRE_RENDER_SCANLINE;
+	const bool preRender = m_scanline == m_preRenderScanline;
 
 	if (m_dot == 1 && visible) {
 		// Draw the whole line from the scroll state in effect at its start.
@@ -104,6 +116,12 @@ void Ppu::tickOne() {
 			incrementY();
 		else if (m_dot == 257)
 			copyHorizontalBits();
+		else if (m_dot == 260 && m_cartridge)
+			// Where the sprite fetches begin, and so where PPU address line A12
+			// rises on a real board. MMC3 counts that edge to time its IRQ;
+			// signalling it once per line is the standard approximation, and it
+			// is only reached while rendering, which is when A12 toggles at all.
+			m_cartridge->ppuScanline();
 		else if (preRender && m_dot >= 280 && m_dot <= 304)
 			copyVerticalBits();
 	}
@@ -431,6 +449,11 @@ std::uint16_t Ppu::mirrorNametable(std::uint16_t address) const {
 		return static_cast<std::uint16_t>(((a & 0x0800) >> 1) | (a & 0x03FF));
 	case Mirroring::FourScreen:
 		return a;
+	case Mirroring::SingleScreenA:
+		// All four nametables land on the same physical kilobyte.
+		return static_cast<std::uint16_t>(a & 0x03FF);
+	case Mirroring::SingleScreenB:
+		return static_cast<std::uint16_t>(0x0400 | (a & 0x03FF));
 	}
 	return a;
 }

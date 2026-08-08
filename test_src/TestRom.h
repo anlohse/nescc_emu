@@ -19,6 +19,10 @@ struct Options {
 	bool trainer = false;
 	bool nes20 = false;
 	bool truncate = false;         // declare more ROM than the file actually holds
+	// NES 2.0 byte 12 bits 0-1: 0 NTSC, 1 PAL, 2 multi-region, 3 Dendy.
+	int nes20Timing = 0;
+	// iNES 1.0 byte 9 bit 0, the only region flag that format has.
+	bool inesPalFlag = false;
 };
 
 /**
@@ -50,8 +54,14 @@ inline std::vector<std::uint8_t> build(const Options& o,
 	image.push_back(static_cast<std::uint8_t>(o.chrBanks));
 	image.push_back(flags6);
 	image.push_back(flags7);
-	for (int i = 8; i < 16; i++)
-		image.push_back(0);
+	for (int i = 8; i < 16; i++) {
+		if (i == 9)
+			image.push_back(static_cast<std::uint8_t>(o.inesPalFlag ? 1 : 0));
+		else if (i == 12)
+			image.push_back(static_cast<std::uint8_t>(o.nes20Timing & 3));
+		else
+			image.push_back(0);
+	}
 
 	if (o.trainer)
 		image.insert(image.end(), 512, 0xAA);

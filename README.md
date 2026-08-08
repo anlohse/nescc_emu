@@ -11,13 +11,16 @@ that keeps the status bar fixed while the level moves beneath it all work.
 
 | Component | State |
 | --- | --- |
-| iNES container parsing | 1.0, with trainer support; NES 2.0 read as 1.0 |
-| Mappers | 0 (NROM) only |
+| iNES container parsing | 1.0 with trainers; NES 2.0 read as 1.0 plus its timing field |
+| Mappers | 0 NROM, 1 MMC1, 2 UxROM, 3 CNROM, 4 MMC3, 7 AxROM, 87 |
+| Region | NTSC and PAL, read from the header and applied to every clock |
+| Mapper IRQ | MMC3's scanline counter, merged with the APU onto one CPU line |
 | CPU bus | RAM + mirroring, PPU/cartridge routing, `peek()` for debuggers |
 | CPU | emu6502, which passes Klaus Dormann's functional test |
 | PPU timing | dot/scanline/frame counters, vblank, NMI, odd-frame dot skip |
 | PPU registers | full register file: write toggle, buffered `$2007`, auto-increment |
 | PPU memory | VRAM with nametable mirroring, palette mirroring, CHR via the mapper |
+| Mirroring | horizontal, vertical, four-screen, both single-screen modes; switchable at runtime |
 | Background rendering | tiles, attributes, fine and coarse scroll across nametables |
 | Sprite rendering | 8x8 and 8x16, flipping, priority, 8-per-line limit, overflow |
 | Sprite-zero hit | reported at the dot of overlap, so mid-frame splits work |
@@ -213,6 +216,32 @@ hardware and avoids inventing key-repeat and event-ordering that the pad does no
 The one addition is that a key whose press *and* release both arrive inside a single
 frame is still reported for that frame — otherwise a tap faster than 16 ms vanishes.
 
+**Mappers answer two questions, and `BankedMapper` does the rest.** Every board here
+owns the same three memories and differs only in which byte of PRG a CPU address lands
+on and which byte of CHR a PPU address lands on. Those are the two virtuals; the address
+decoding, work RAM, CHR RAM and bounds checking live in the base once. Bank indices are
+signed, so `-1` is the last bank and `-2` the one before it — which is how boards
+describe their fixed windows, and it saves every mapper from counting banks itself.
+
+Moving NROM onto that base was verified by comparing a rendered frame of Super Mario
+Bros before and after: byte-identical.
+
+**The PPU asks the cartridge for mirroring on every nametable access** rather than
+caching it at load time. MMC1, MMC3 and AxROM all change mirroring at runtime, and some
+games change it mid-frame.
+
+**The region comes from the cartridge and reaches every clock.** PAL is not a display
+setting — it is a different machine: a slower CPU (1.662607 MHz), 312 scanlines instead
+of 262, no odd-frame dot skip, and a PPU that runs at 16 dots per 5 CPU cycles rather
+than a clean 3 per 1. That ratio is why `Nes::step` carries a fractional remainder
+between steps instead of rounding; rounding would drift a whole scanline every few
+hundred instructions. The APU's frame sequencer, noise periods and DMC rates are all
+retuned to match, and both front-ends take their frame rate and resampling ratio from
+the console rather than from a constant.
+
+Region means PAL versus NTSC, not Japan versus America — Japan and North America both
+ran NTSC, so a Famicom cartridge and its NES counterpart are timing-identical.
+
 **The APU mixes nonlinearly and filters its own output.** The hardware sums its five
 channels through a resistor ladder, so a channel gets quieter as the others get louder;
 a linear sum is audibly wrong, harsh and too loud once more than two channels play. The
@@ -224,6 +253,22 @@ Nyquist folds back down as noise.
 
 ## Known gaps
 
+- **CNROM and AxROM have never run a commercial game.** NROM, MMC1, UxROM, MMC3 and 87
+  have; those two are covered by synthetic-ROM tests only.
+- **No Famicom expansion audio.** The Famicom cartridge connector carries an audio-in
+  pin that the NES connector does not, so Japanese carts could add sound chips — VRC6,
+  VRC7, Namco 163, Sunsoft 5B, MMC5, FDS. None are supported, and a game that uses one
+  will play with those channels silent rather than refusing to run.
+- **No Famicom microphone.** The hardwired second Famicom pad has a microphone where
+  the NES has Start and Select, read on `$4016` bit 2. A few Japanese games use it;
+  here those bits read as zero, which is correct for an NES and wrong for a Famicom.
+- **No FDS support** — Famicom Disk System images are a different container entirely.
+- **No bus conflicts.** On UxROM and CNROM the value written to ROM is ANDed with the
+  byte already there, and a few games depend on it. Every board here takes the written
+  value as-is.
+- **MMC1 accepts consecutive writes.** Hardware ignores the second write of a
+  read-modify-write pair, because it arrives on the very next cycle; this does not, so a
+  game using `INC $8000` on the register would behave differently.
 - **No save states, no battery-backed save files**, so a game with a save chip cannot
   keep one.
 - **No gamepad support** — keyboard only. SDL's game-controller API would be a small
@@ -240,6 +285,10 @@ Nyquist folds back down as noise.
   enough for most games and not enough for a few.
 - **Sprite overflow is set by the real 8-per-line rule**, not by hardware's buggy
   evaluation, which both over- and under-reports on real silicon.
+- **MMC3's counter is clocked once per scanline**, at dot 260, where the sprite fetches
+  begin. Hardware counts rising edges on PPU address line A12, which during rendering
+  works out to the same thing — but a game that toggles `$2000`'s pattern-table bits
+  mid-line can produce extra edges this will miss.
 - **The `$2002` read race is not modelled** — reading exactly as vblank is raised should
   suppress the NMI.
 - **OAM DMA always charges 513 cycles**; hardware charges 514 when the write lands on
@@ -247,15 +296,18 @@ Nyquist folds back down as noise.
 
 ## Next
 
-1. **More mappers.** NROM is 32 KB of PRG and nothing else, which is roughly the first
-   two years of the library. MMC1 and UNROM open up most of the rest; MMC3 adds a
-   scanline-counter IRQ, which is the first thing here that would demand tighter PPU
-   timing than the current scanline granularity.
-2. A decimal-mode switch in emu6502: the 2A03 ignores the `D` flag in `ADC`/`SBC`, and
-   the core currently implements full BCD.
-3. nestest, whenever the ROM is available — still the only thing that would validate
+1. **Battery-backed saves.** Zelda has a save chip and nothing keeps it: the `.sav`
+   file is a straight dump of the cartridge's work RAM, so this is small and immediately
+   visible to anyone actually playing.
+2. nestest, whenever the ROM is available — still the only thing that would validate
    the undocumented opcodes and exact cycle counts against a reference. The `blargg`
-   APU test ROMs are the equivalent gate for the sound, and would decide how much the
-   timing approximations above actually matter.
-4. Save states. The console's whole state is a handful of plain structs, so this is
-   mostly a serialisation exercise — and it makes debugging the harder games practical.
+   APU and MMC3 test ROMs are the equivalent gates for sound and for the scanline
+   counter, and would settle how much the timing approximations above actually matter.
+3. A decimal-mode switch in emu6502: the 2A03 ignores the `D` flag in `ADC`/`SBC`, and
+   the core currently implements full BCD.
+4. Save states — the console's whole state is a handful of plain structs, so this is
+   mostly a serialisation exercise, and it makes debugging the harder games practical.
+5. Bus conflicts on UxROM and CNROM, and MMC1's consecutive-write rule — the accuracy
+   gaps above that a real game is most likely to notice.
+6. Famicom expansion audio, if a cart that uses it ever turns up. VRC6 is the usual
+   first one, and it would mean letting a mapper contribute to the APU's mix.

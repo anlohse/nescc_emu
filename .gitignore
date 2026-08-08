@@ -2,6 +2,9 @@
 /build_*
 /roms
 
+# Editor state: machine-specific include and compiler paths.
+/.vscode
+
 # Screenshots land in the working directory.
 nes-shot-*.bmp
 *.ppm

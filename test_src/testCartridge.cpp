@@ -45,9 +45,11 @@ TEST_CASE("rejects_images_that_are_not_ines") {
 	}
 	SUBCASE("unsupported mapper") {
 		testrom::Options o;
-		o.mapper = 4;                       // MMC3
+		o.mapper = 9;                       // MMC2, which switches banks on reads
 		CHECK(Cartridge::fromINes(testrom::build(o), &error) == nullptr);
-		CHECK(error.find("mapper 4") != std::string::npos);
+		CHECK(error.find("mapper 9") != std::string::npos);
+		// The message should say what *is* available, not just what is not.
+		CHECK(error.find("MMC3") != std::string::npos);
 	}
 }
 

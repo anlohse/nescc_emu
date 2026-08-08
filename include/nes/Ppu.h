@@ -31,11 +31,15 @@ namespace nes {
  */
 class Ppu {
 public:
-	// NTSC geometry.
+	// NTSC geometry, and the default. PAL keeps the same 341-dot line and the
+	// same vblank scanline, but adds 50 lines of extra blanking at the bottom.
 	static const int DOTS_PER_SCANLINE = 341;
 	static const int SCANLINES_PER_FRAME = 262;
 	static const int VBLANK_SCANLINE = 241;
 	static const int PRE_RENDER_SCANLINE = 261;
+
+	static const int PAL_SCANLINES_PER_FRAME = 312;
+	static const int PAL_PRE_RENDER_SCANLINE = 311;
 
 	static const int SCREEN_WIDTH = 256;
 	static const int SCREEN_HEIGHT = 240;
@@ -63,6 +67,13 @@ public:
 	explicit Ppu(Cartridge* cartridge = nullptr);
 
 	void setCartridge(Cartridge* cartridge) { m_cartridge = cartridge; }
+
+	/** Switch the frame geometry. Takes effect at the next scanline rollover. */
+	void setRegion(Region region);
+	Region region() const { return m_region; }
+	int scanlinesPerFrame() const { return m_scanlinesPerFrame; }
+	int preRenderScanline() const { return m_preRenderScanline; }
+
 	void reset();
 
 	/** Advance by @p dots. The caller supplies three per CPU cycle. */
@@ -146,6 +157,10 @@ private:
 	// The PPU's data bus retains the last value placed on it; the low five bits
 	// of a $2002 read come from here rather than from the status register.
 	std::uint8_t m_openBus;
+
+	Region m_region;
+	int m_scanlinesPerFrame;
+	int m_preRenderScanline;
 
 	int m_scanline;
 	int m_dot;

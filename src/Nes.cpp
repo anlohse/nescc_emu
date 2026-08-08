@@ -4,13 +4,11 @@
 
 namespace nes {
 
-namespace {
-const int DOTS_PER_CPU_CYCLE = 3;   // NTSC
-} // namespace
-
 Nes::Nes() : m_regs(), m_cartridge(), m_ppu(nullptr), m_apu(),
 		m_bus(new NesBus(nullptr, &m_ppu, &m_apu)), m_clock(),
-		m_cpu(new Processor(m_bus.get(), &m_regs, &m_clock)) {
+		m_cpu(new Processor(m_bus.get(), &m_regs, &m_clock)),
+		m_region(Region::Ntsc), m_dotNumerator(3), m_dotDenominator(1),
+		m_dotRemainder(0) {
 	std::memset(&m_regs, 0, sizeof(m_regs));
 	// The DMC fetches its samples over the CPU bus, like a second bus master.
 	m_apu.setBus(m_bus.get());
@@ -30,6 +28,20 @@ void Nes::setCartridge(std::unique_ptr<Cartridge> cartridge) {
 	m_cartridge = std::move(cartridge);
 	m_bus->setCartridge(m_cartridge.get());
 	m_ppu.setCartridge(m_cartridge.get());
+
+	// The cartridge decides the region, and the region decides the timing of
+	// every other chip in the machine.
+	m_region = m_cartridge ? m_cartridge->region() : Region::Ntsc;
+	m_ppu.setRegion(m_region);
+	m_apu.setRegion(m_region);
+	if (m_region == Region::Pal) {
+		m_dotNumerator = 16;   // 3.2 dots per CPU cycle
+		m_dotDenominator = 5;
+	} else {
+		m_dotNumerator = 3;
+		m_dotDenominator = 1;
+	}
+	m_dotRemainder = 0;
 }
 
 void Nes::reset() {
@@ -41,6 +53,7 @@ void Nes::reset() {
 	m_regs.sr = FLAG__ | FLAG_I;
 	m_regs.pc = m_bus->read(0xFFFC) | (m_bus->read(0xFFFD) << 8);
 	m_cpu->clearInterrupts();
+	m_dotRemainder = 0;
 	m_clock.reset();
 	m_clock.beginCycle();
 	m_clock.waitCycles(7); // the reset sequence costs 7 cycles
@@ -63,15 +76,20 @@ int Nes::step() {
 		cycles = static_cast<int>(m_clock.cycles() - before);
 	}
 
-	m_ppu.tick(cycles * DOTS_PER_CPU_CYCLE);
+	m_dotRemainder += cycles * m_dotNumerator;
+	m_ppu.tick(m_dotRemainder / m_dotDenominator);
+	m_dotRemainder %= m_dotDenominator;
 	m_apu.tick(cycles);
 
 	if (m_ppu.takeNmi())
 		m_cpu->nmi();
-	// The APU's IRQ is level-triggered: it stays asserted until the handler
-	// acknowledges it by reading $4015 or writing $4010/$4017. Re-asserting
-	// every step is correct, and is why this is not an edge like the NMI.
-	m_cpu->irq(m_apu.irqAsserted());
+	// Two devices share the IRQ line: the APU's frame counter and DMC, and the
+	// cartridge on boards with a counter of their own. Both are level-triggered
+	// and stay asserted until the handler acknowledges them through their own
+	// registers, so re-evaluating every step is correct -- and is why this is
+	// not an edge like the NMI. The CPU sees one line, as it does in hardware.
+	const bool cartIrq = m_cartridge && m_cartridge->irqAsserted();
+	m_cpu->irq(m_apu.irqAsserted() || cartIrq);
 
 	return cycles;
 }

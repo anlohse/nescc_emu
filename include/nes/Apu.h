@@ -1,6 +1,8 @@
 #ifndef NES_APU_H
 #define NES_APU_H
 
+#include "Region.h"
+
 #include <6502cc/emu_bus.h>
 
 #include <cstdint>
@@ -45,13 +47,26 @@ public:
 	static const std::uint8_t STATUS_FRAME_IRQ = 0x40;
 	static const std::uint8_t STATUS_DMC_IRQ   = 0x80;
 
-	/** CPU cycles per second on an NTSC 2A03. */
+	/** CPU cycles per second on an NTSC 2A03, and on its PAL counterpart. */
 	static const int CPU_CLOCK_HZ = 1789773;
+	static const int PAL_CPU_CLOCK_HZ = 1662607;
+
+	static int cpuClockHz(Region region) {
+		return region == Region::Pal ? PAL_CPU_CLOCK_HZ : CPU_CLOCK_HZ;
+	}
 
 	Apu();
 
 	/** The DMC fetches its samples over the CPU bus, so it needs one. */
 	void setBus(Bus* bus) { m_bus = bus; }
+
+	/**
+	 * Retune for a region. Changes the frame sequencer's step boundaries and
+	 * the noise and DMC period tables, all of which are derived from the CPU
+	 * clock and so differ between the two consoles.
+	 */
+	void setRegion(Region region);
+	Region region() const { return m_region; }
 
 	void reset();
 
@@ -201,6 +216,16 @@ private:
 	float mix();
 
 	Bus* m_bus;
+	Region m_region;
+	// Pointers into the static per-region tables, so a lookup costs nothing.
+	const std::uint16_t* m_noisePeriods;
+	const std::uint16_t* m_dmcRates;
+	// Frame-sequencer boundaries, in CPU cycles. The first three are shared by
+	// both sequences; the rest depend on which mode is selected. None of them
+	// divide evenly, because a 240 Hz sequence off a 1.79 MHz clock cannot.
+	std::uint32_t m_step1, m_step2, m_step3;
+	std::uint32_t m_step4Irq, m_step4Clock, m_step4Wrap;
+	std::uint32_t m_step5Clock, m_step5Wrap;
 
 	Pulse m_pulse1;
 	Pulse m_pulse2;

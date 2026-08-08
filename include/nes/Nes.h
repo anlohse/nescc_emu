@@ -78,6 +78,13 @@ public:
 	/** Total CPU cycles since the last reset. */
 	std::uint64_t cycles() const { return m_clock.cycles(); }
 
+	/** Taken from the cartridge header; NTSC with no cartridge loaded. */
+	Region region() const { return m_region; }
+	/** CPU cycles per second for this region -- what audio resampling needs. */
+	int cpuClockHz() const { return Apu::cpuClockHz(m_region); }
+	/** Frames per second this region's PPU produces. */
+	double frameRate() const { return m_region == Region::Pal ? 50.0070 : 60.0988; }
+
 private:
 	Registers m_regs;
 	std::unique_ptr<Cartridge> m_cartridge;
@@ -86,6 +93,15 @@ private:
 	std::unique_ptr<NesBus> m_bus;
 	default_clock m_clock;
 	std::unique_ptr<Processor> m_cpu;
+
+	Region m_region;
+	// PPU dots per CPU cycle as a fraction: 3/1 on NTSC, 16/5 on PAL. PAL's
+	// ratio is not a whole number, so the leftover has to be carried between
+	// steps rather than rounded away -- rounding would drift a whole scanline
+	// every few hundred instructions.
+	int m_dotNumerator;
+	int m_dotDenominator;
+	int m_dotRemainder;
 };
 
 } // namespace nes

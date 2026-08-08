@@ -111,8 +111,10 @@ if(NES_BUILD_TESTS)
         test_src/testApu.cpp
         test_src/testBus.cpp
         test_src/testController.cpp
+        test_src/testMappers.cpp
         test_src/testNestest.cpp
         test_src/testPpu.cpp
+        test_src/testRegion.cpp
     )
     target_link_libraries(nes_test PRIVATE nes_lib doctest::doctest)
 

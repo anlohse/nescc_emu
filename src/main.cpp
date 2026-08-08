@@ -37,10 +37,11 @@ const int WAV_RATE = 44100;
  */
 class WavRecorder {
 public:
-	WavRecorder() : m_phase(0.0), m_accumulator(0.0), m_count(0) { }
+	explicit WavRecorder(int cpuClockHz = nes::Apu::CPU_CLOCK_HZ) :
+			m_cpuClockHz(cpuClockHz), m_phase(0.0), m_accumulator(0.0), m_count(0) { }
 
 	void consume(const std::vector<float>& input) {
-		const double ratio = static_cast<double>(nes::Apu::CPU_CLOCK_HZ) / WAV_RATE;
+		const double ratio = static_cast<double>(m_cpuClockHz) / WAV_RATE;
 		for (float sample : input) {
 			m_accumulator += sample;
 			m_count++;
@@ -95,6 +96,7 @@ public:
 	}
 
 private:
+	int m_cpuClockHz;
 	double m_phase;
 	double m_accumulator;
 	int m_count;
@@ -113,6 +115,7 @@ void usage(const char* argv0) {
 		"  --frames=N        run N PPU frames, then stop\n"
 		"  --screenshot=FILE write the final frame as a binary PPM\n"
 		"  --audio=FILE      record the APU to a 44.1 kHz mono WAV\n"
+		"  --dump-attr       print the attribute table as one palette digit per tile\n"
 		"  --press=SPEC      hold a button for a while; repeatable\n"
 		"                    SPEC is BUTTON@FRAME[:HELD][/PORT], e.g.\n"
 		"                      --press=start@200        Start at frame 200 for 10\n"
@@ -177,6 +180,30 @@ bool parsePress(const char* spec, ScriptedPress* out) {
 	return true;
 }
 
+/**
+ * Print which palette each tile of a nametable selects, one digit per tile.
+ *
+ * The attribute table packs four tiles' palette numbers into two bits each and
+ * covers a 4x4 block per byte, which makes it painful to read by hand and easy
+ * to decode wrongly. Seeing the decoded grid next to the rendered picture is
+ * how you tell "the game asked for that" from "we picked the wrong palette".
+ */
+void dumpAttributes(const nes::Ppu& ppu, std::uint16_t nametable) {
+	std::fprintf(stderr, "attributes for nametable $%04X:\n", nametable);
+	for (int row = 0; row < 30; row++) {
+		std::fprintf(stderr, "  ");
+		for (int col = 0; col < 32; col++) {
+			const std::uint16_t address = static_cast<std::uint16_t>(
+					nametable + 0x3C0 + (row / 4) * 8 + (col / 4));
+			const std::uint8_t attribute = ppu.vramRead(address);
+			// Two bits per 2x2 quadrant of the 4x4 block.
+			const int shift = ((row & 2) << 1) | (col & 2);
+			std::fprintf(stderr, "%d", (attribute >> shift) & 3);
+		}
+		std::fprintf(stderr, "\n");
+	}
+}
+
 /** Dump the framebuffer as a binary PPM -- viewable anywhere, no dependencies. */
 bool writePpm(const char* path, const nes::Ppu& ppu) {
 	std::FILE* f = std::fopen(path, "wb");
@@ -204,6 +231,7 @@ int main(int argc, char** argv) {
 	const char* romPath = nullptr;
 	bool trace = false;
 	bool stopOnTrap = false;
+	bool dumpAttr = false;
 	const char* screenshot = nullptr;
 	const char* audioPath = nullptr;
 	long long frames = -1;
@@ -217,6 +245,8 @@ int main(int argc, char** argv) {
 			trace = true;
 		} else if (std::strcmp(argv[i], "--stop-on-trap") == 0) {
 			stopOnTrap = true;
+		} else if (std::strcmp(argv[i], "--dump-attr") == 0) {
+			dumpAttr = true;
 		} else if (startsWith(argv[i], "--start-pc=", &rest)) {
 			startPc = std::strtol(rest, nullptr, 16);
 		} else if (startsWith(argv[i], "--max=", &rest)) {
@@ -261,9 +291,10 @@ int main(int argc, char** argv) {
 	}
 
 	const nes::Cartridge* cart = console.cartridge();
-	std::fprintf(stderr, "%s: mapper %d, PRG %zu KB, CHR %zu KB, %s mirroring%s\n",
+	std::fprintf(stderr, "%s: mapper %d, PRG %zu KB, CHR %zu KB, %s mirroring, %s%s%s\n",
 			romPath, cart->mapperNumber(), cart->prgSize() / 1024, cart->chrSize() / 1024,
-			nes::toString(cart->mirroring()), cart->hasBattery() ? ", battery" : "");
+			nes::toString(cart->mirroring()), nes::toString(cart->region()),
+			cart->isNes20() ? ", NES 2.0" : "", cart->hasBattery() ? ", battery" : "");
 
 	console.reset();
 	if (startPc >= 0)
@@ -271,7 +302,7 @@ int main(int argc, char** argv) {
 
 	// The APU only mixes when someone is listening; the rest of the time the
 	// channels still run but no samples are produced.
-	WavRecorder recorder;
+	WavRecorder recorder(console.cpuClockHz());
 	if (audioPath)
 		console.apu().setSampleOutput(true);
 
@@ -367,10 +398,19 @@ int main(int argc, char** argv) {
 			ppu.control(), ppu.mask(), ppu.renderingEnabled() ? "on" : "off");
 	std::fprintf(stderr, "     %d/4096 nametable bytes written, %d/256 OAM bytes set\n",
 			nametableBytes, oamBytes);
-	std::fprintf(stderr, "     palette:");
+	// Both halves: the background palettes at $3F00 and the sprite palettes at
+	// $3F10. Printing only the first half hides half the reasons a screen can
+	// come out the wrong colour.
+	std::fprintf(stderr, "     bg palette:    ");
 	for (int i = 0; i < 16; i++)
 		std::fprintf(stderr, " %02X", ppu.vramRead(static_cast<std::uint16_t>(0x3F00 + i)));
+	std::fprintf(stderr, "\n     sprite palette:");
+	for (int i = 0; i < 16; i++)
+		std::fprintf(stderr, " %02X", ppu.vramRead(static_cast<std::uint16_t>(0x3F10 + i)));
 	std::fprintf(stderr, "\n");
+
+	if (dumpAttr)
+		dumpAttributes(ppu, 0x2000);
 
 	if (screenshot) {
 		if (writePpm(screenshot, ppu))

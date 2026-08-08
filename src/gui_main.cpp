@@ -17,10 +17,10 @@
 
 namespace {
 
-// NTSC is 60.0988 Hz, not 60. The difference is a frame every twenty seconds --
-// small enough to ignore for one session, large enough to hear once there is
-// audio, since the APU's sample rate is derived from the same clock.
-const double FRAME_SECONDS = 1.0 / 60.0988;
+// NTSC is 60.0988 Hz, not 60, and PAL is 50.0070, not 50. The difference is a
+// frame every twenty seconds -- small enough to ignore for one session, large
+// enough to hear once there is audio, since the APU's sample rate comes off the
+// same clock. The console tells us which it is; see Nes::frameRate().
 
 const int NES_W = nes::Ppu::SCREEN_WIDTH;
 const int NES_H = nes::Ppu::SCREEN_HEIGHT;
@@ -43,10 +43,11 @@ const double QUEUE_SLACK_MS = 15.0;
  */
 class Resampler {
 public:
-	Resampler() : m_phase(0.0), m_accumulator(0.0), m_count(0) { }
+	explicit Resampler(int cpuClockHz) :
+			m_cpuClockHz(cpuClockHz), m_phase(0.0), m_accumulator(0.0), m_count(0) { }
 
 	void process(const std::vector<float>& input, double queuedMs, std::vector<float>* out) {
-		double ratio = static_cast<double>(nes::Apu::CPU_CLOCK_HZ) / AUDIO_RATE;
+		double ratio = static_cast<double>(m_cpuClockHz) / AUDIO_RATE;
 		if (queuedMs > TARGET_QUEUED_MS + QUEUE_SLACK_MS)
 			ratio *= 1.004;        // running long: emit slightly fewer samples
 		else if (queuedMs < TARGET_QUEUED_MS - QUEUE_SLACK_MS)
@@ -75,6 +76,7 @@ public:
 	}
 
 private:
+	int m_cpuClockHz;
 	double m_phase;
 	double m_accumulator;
 	int m_count;
@@ -296,7 +298,7 @@ int main(int argc, char* argv[]) {
 			SDL_PauseAudioDevice(audioDevice, 0);
 		}
 	}
-	Resampler resampler;
+	Resampler resampler(console.cpuClockHz());
 	std::vector<float> audioOut;
 
 	// The console's fixed palette, pre-expanded with an opaque alpha.
@@ -308,8 +310,8 @@ int main(int argc, char* argv[]) {
 	static std::uint32_t pixels[NES_W * NES_H];
 
 	const std::uint64_t perfFreq = SDL_GetPerformanceFrequency();
-	const std::uint64_t frameTicks =
-			static_cast<std::uint64_t>(FRAME_SECONDS * static_cast<double>(perfFreq));
+	const std::uint64_t frameTicks = static_cast<std::uint64_t>(
+			static_cast<double>(perfFreq) / console.frameRate());
 
 	// An absolute deadline, advanced by exactly one frame each time. Measuring
 	// the sleep from "now" instead would let every frame's overshoot accumulate,

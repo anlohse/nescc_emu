@@ -28,26 +28,23 @@ const std::uint8_t TRIANGLE_TABLE[32] = {
 	 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15
 };
 
-// NTSC noise periods, in APU cycles.
-const std::uint16_t NOISE_PERIODS[16] = {
+// Noise periods, in APU cycles. Both tables aim at the same pitches, so the PAL
+// values are not simply scaled -- they are what the designers picked to land on
+// the same notes from a slower clock.
+const std::uint16_t NOISE_PERIODS_NTSC[16] = {
 	4, 8, 16, 32, 64, 96, 128, 160, 202, 254, 380, 508, 762, 1016, 2034, 4068
 };
-
-// NTSC DMC rates, in CPU cycles per output bit.
-const std::uint16_t DMC_RATES[16] = {
-	428, 380, 340, 320, 286, 254, 226, 214, 190, 160, 142, 128, 106, 84, 72, 54
+const std::uint16_t NOISE_PERIODS_PAL[16] = {
+	4, 8, 14, 30, 60, 88, 118, 148, 188, 236, 354, 472, 708, 944, 1890, 3778
 };
 
-// Frame counter step boundaries, in CPU cycles. Nothing here divides evenly,
-// because the sequence is clocked at 240 Hz from a 1.79 MHz clock.
-const std::uint32_t FRAME_STEP1 = 7457;
-const std::uint32_t FRAME_STEP2 = 14913;
-const std::uint32_t FRAME_STEP3 = 22371;
-const std::uint32_t FRAME_STEP4_IRQ   = 29828;
-const std::uint32_t FRAME_STEP4_CLOCK = 29829;
-const std::uint32_t FRAME_STEP4_WRAP  = 29830;
-const std::uint32_t FRAME_STEP5_CLOCK = 37281;
-const std::uint32_t FRAME_STEP5_WRAP  = 37282;
+// DMC rates, in CPU cycles per output bit.
+const std::uint16_t DMC_RATES_NTSC[16] = {
+	428, 380, 340, 320, 286, 254, 226, 214, 190, 160, 142, 128, 106, 84, 72, 54
+};
+const std::uint16_t DMC_RATES_PAL[16] = {
+	398, 354, 316, 298, 276, 236, 210, 198, 176, 148, 132, 118, 98, 78, 66, 50
+};
 
 // The CPU is held off the bus while the DMC fetches a sample byte.
 const int DMC_FETCH_STALL = 4;
@@ -195,6 +192,23 @@ std::uint8_t Apu::Noise::output() const {
 /* Apu                                                                       */
 /* ------------------------------------------------------------------------ */
 
+void Apu::setRegion(Region region) {
+	m_region = region;
+	if (region == Region::Pal) {
+		m_noisePeriods = NOISE_PERIODS_PAL;
+		m_dmcRates = DMC_RATES_PAL;
+		m_step1 = 8313;  m_step2 = 16627; m_step3 = 24939;
+		m_step4Irq = 33252; m_step4Clock = 33253; m_step4Wrap = 33254;
+		m_step5Clock = 41565; m_step5Wrap = 41566;
+	} else {
+		m_noisePeriods = NOISE_PERIODS_NTSC;
+		m_dmcRates = DMC_RATES_NTSC;
+		m_step1 = 7457;  m_step2 = 14913; m_step3 = 22371;
+		m_step4Irq = 29828; m_step4Clock = 29829; m_step4Wrap = 29830;
+		m_step5Clock = 37281; m_step5Wrap = 37282;
+	}
+}
+
 Apu::Apu() : m_bus(nullptr), m_pulse1(), m_pulse2(), m_triangle(), m_noise(),
 		m_dmc(), m_frameCounter(0), m_frameMode(4), m_frameIrqInhibit(false),
 		m_frameIrq(false), m_dmcIrq(false), m_frameResetDelay(0),
@@ -202,6 +216,7 @@ Apu::Apu() : m_bus(nullptr), m_pulse1(), m_pulse2(), m_triangle(), m_noise(),
 		m_hpPrevIn(0.0f), m_hpPrevOut(0.0f), m_lpPrev(0.0f),
 		m_generateSamples(false), m_samples() {
 	m_pulse1.onesComplement = true;
+	setRegion(Region::Ntsc);
 	reset();
 }
 
@@ -286,57 +301,42 @@ void Apu::tick(int cycles) {
 void Apu::clockFrameCounter() {
 	m_frameCounter++;
 
+	// Comparisons rather than a switch: the boundaries are runtime values now,
+	// because PAL clocks the same 240 Hz sequence from a slower CPU.
+	if (m_frameCounter == m_step1) {
+		clockQuarterFrame();
+		return;
+	}
+	if (m_frameCounter == m_step2) {
+		clockQuarterFrame();
+		clockHalfFrame();
+		return;
+	}
+	if (m_frameCounter == m_step3) {
+		clockQuarterFrame();
+		return;
+	}
+
 	if (m_frameMode == 4) {
-		switch (m_frameCounter) {
-		case FRAME_STEP1:
-			clockQuarterFrame();
-			break;
-		case FRAME_STEP2:
+		// The interrupt is asserted across three consecutive cycles, which is
+		// what lets a game catch it however its polling happens to line up.
+		if (m_frameCounter == m_step4Irq || m_frameCounter == m_step4Clock
+				|| m_frameCounter == m_step4Wrap) {
+			if (!m_frameIrqInhibit)
+				m_frameIrq = true;
+		}
+		if (m_frameCounter == m_step4Clock) {
 			clockQuarterFrame();
 			clockHalfFrame();
-			break;
-		case FRAME_STEP3:
-			clockQuarterFrame();
-			break;
-		case FRAME_STEP4_IRQ:
-			if (!m_frameIrqInhibit)
-				m_frameIrq = true;
-			break;
-		case FRAME_STEP4_CLOCK:
-			clockQuarterFrame();
-			clockHalfFrame();
-			if (!m_frameIrqInhibit)
-				m_frameIrq = true;
-			break;
-		case FRAME_STEP4_WRAP:
-			if (!m_frameIrqInhibit)
-				m_frameIrq = true;
+		} else if (m_frameCounter == m_step4Wrap) {
 			m_frameCounter = 0;
-			break;
-		default:
-			break;
 		}
 	} else {
-		switch (m_frameCounter) {
-		case FRAME_STEP1:
-			clockQuarterFrame();
-			break;
-		case FRAME_STEP2:
+		if (m_frameCounter == m_step5Clock) {
 			clockQuarterFrame();
 			clockHalfFrame();
-			break;
-		case FRAME_STEP3:
-			clockQuarterFrame();
-			break;
-		case FRAME_STEP5_CLOCK:
-			clockQuarterFrame();
-			clockHalfFrame();
-			break;
-		case FRAME_STEP5_WRAP:
+		} else if (m_frameCounter == m_step5Wrap) {
 			m_frameCounter = 0;
-			break;
-		default:
-			break;
 		}
 	}
 }
@@ -546,7 +546,7 @@ void Apu::writeRegister(std::uint16_t address, std::uint8_t value) {
 		break;
 	case 0x400E:
 		m_noise.mode = (value & 0x80) != 0;
-		m_noise.timerPeriod = NOISE_PERIODS[value & 0x0F];
+		m_noise.timerPeriod = m_noisePeriods[value & 0x0F];
 		break;
 	case 0x400F:
 		if (m_noise.enabled)
@@ -558,7 +558,7 @@ void Apu::writeRegister(std::uint16_t address, std::uint8_t value) {
 	case 0x4010:
 		m_dmc.irqEnabled = (value & 0x80) != 0;
 		m_dmc.loop = (value & 0x40) != 0;
-		m_dmc.timerPeriod = DMC_RATES[value & 0x0F];
+		m_dmc.timerPeriod = m_dmcRates[value & 0x0F];
 		// Clearing the enable also acknowledges any pending interrupt, which is
 		// how a handler shuts one off.
 		if (!m_dmc.irqEnabled)
