@@ -101,9 +101,12 @@ Roughly in order of how likely a real game is to notice:
   interrupt currently powers up inhibited, which is a deviation adopted because a real
   game needs it, and only a test ROM can say what the hardware truly does.
 - ~~**Bus conflicts** on UxROM and CNROM~~ — done, driven by the NES 2.0 submapper
-  rather than guessed from the mapper number. **MMC1's consecutive-write rule** remains:
-  hardware ignores the second write of a read-modify-write pair because it lands on the
-  very next cycle, and this does not.
+  rather than guessed from the mapper number.
+- ~~**MMC1's consecutive-write rule.**~~ Done, and it needed fixing in the CPU first: a
+  read-modify-write instruction writes the unmodified byte back before the result, one
+  cycle apart, and the core was only ever emitting the second. Now it emits both, and
+  MMC1 keeps the first and drops the second — so `DEC $8000` shifts in a bit of what was
+  already at that address, which is what the games expecting it were written against.
 - **The `$2002` read race** — reading exactly as vblank is raised should suppress the
   NMI.
 - **Mid-scanline rendering.** Currently each line is drawn from the scroll state at its

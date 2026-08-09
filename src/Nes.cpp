@@ -88,6 +88,10 @@ int Nes::step() {
 		m_clock.waitCycles(stall);
 		cycles = stall;
 	} else {
+		// A board that cares how close two writes are needs to know where one
+		// instruction ends and the next begins; nothing below this line does.
+		if (m_cartridge)
+			m_cartridge->beginInstruction();
 		const std::uint64_t before = m_clock.cycles();
 		m_cpu->step();
 		cycles = static_cast<int>(m_clock.cycles() - before);

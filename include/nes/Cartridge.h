@@ -35,6 +35,9 @@ public:
 	static std::unique_ptr<Cartridge> fromFile(const std::string& path,
 			std::string* error = nullptr);
 
+	/** Tell the board a new CPU instruction is starting. See Mapper. */
+	void beginInstruction() { m_mapper->beginInstruction(); }
+
 	std::uint8_t cpuRead(std::uint16_t address) const { return m_mapper->cpuRead(address); }
 	void cpuWrite(std::uint16_t address, std::uint8_t value) { m_mapper->cpuWrite(address, value); }
 	std::uint8_t ppuRead(std::uint16_t address) const { return m_mapper->ppuRead(address); }

@@ -16,6 +16,7 @@ that keeps the status bar fixed while the level moves beneath it all work.
 | Region | NTSC and PAL, read from the header and applied to every clock |
 | Mapper IRQ | MMC3's scanline counter, merged with the APU onto one CPU line |
 | Bus conflicts | on the discrete boards, when the NES 2.0 submapper declares them |
+| MMC1 serial port | five-bit shift register, with the consecutive-write rule applied |
 | CPU bus | RAM + mirroring, PPU/cartridge routing, `peek()` for debuggers |
 | CPU | emu6502, which passes Klaus Dormann's functional test |
 | PPU timing | dot/scanline/frame counters, vblank, NMI, odd-frame dot skip |
@@ -319,9 +320,6 @@ Nyquist folds back down as noise.
   on UxROM, CNROM and AxROM means the board has them; 1 means it does not; iNES 1.0 has
   nowhere to say and so is treated as not. Nothing is inferred from the mapper number
   alone, because a wrong guess does not fail loudly — it quietly selects the wrong bank.
-- **MMC1 accepts consecutive writes.** Hardware ignores the second write of a
-  read-modify-write pair, because it arrives on the very next cycle; this does not, so a
-  game using `INC $8000` on the register would behave differently.
 - **Saves are written on exit and on reset, not continuously.** Closing the window or
   pressing `R` keeps your game; killing the process loses whatever was written since
   the last of those.
@@ -381,11 +379,9 @@ view, including the backend-interface design and what would be needed for a 1.0.
    the undocumented opcodes and exact cycle counts against a reference. The `blargg`
    APU and MMC3 test ROMs are the equivalent gates for sound and for the scanline
    counter, and would settle how much the timing approximations above actually matter.
-3. A decimal-mode switch in emu6502: the 2A03 ignores the `D` flag in `ADC`/`SBC`, and
+2. A decimal-mode switch in emu6502: the 2A03 ignores the `D` flag in `ADC`/`SBC`, and
    the core currently implements full BCD.
-4. Save states — the console's whole state is a handful of plain structs, so this is
+3. Save states — the console's whole state is a handful of plain structs, so this is
    mostly a serialisation exercise, and it makes debugging the harder games practical.
-5. MMC1's consecutive-write rule — hardware ignores the second write of a
-   read-modify-write pair, and this does not.
-6. Famicom expansion audio, if a cart that uses it ever turns up. VRC6 is the usual
+4. Famicom expansion audio, if a cart that uses it ever turns up. VRC6 is the usual
    first one, and it would mean letting a mapper contribute to the APU's mix.

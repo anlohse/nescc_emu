@@ -266,6 +266,7 @@ Mmc1Mapper::Mmc1Mapper(std::vector<std::uint8_t> prg, std::vector<std::uint8_t> 
 		Mirroring mirroring, bool fourScreen) :
 		BankedMapper(std::move(prg), std::move(chr), mirroring, fourScreen),
 		m_shift(MMC1_SHIFT_RESET),
+		m_instructionsKnown(false), m_wroteThisInstruction(false),
 		// PRG mode 3 at power-on: the last bank is fixed at $C000, which is the
 		// only arrangement where the reset vector is guaranteed to be readable
 		// before the game has configured anything.
@@ -275,6 +276,16 @@ Mmc1Mapper::Mmc1Mapper(std::vector<std::uint8_t> prg, std::vector<std::uint8_t> 
 }
 
 void Mmc1Mapper::writeRegister(std::uint16_t address, std::uint8_t value) {
+	// The second write of a read-modify-write lands one cycle after the first,
+	// and the board is still busy with it. Note that this drops the write the
+	// programmer meant and keeps the one the CPU made on its way past -- which
+	// is the whole point, since the two carry different bits.
+	if (m_instructionsKnown) {
+		if (m_wroteThisInstruction)
+			return;
+		m_wroteThisInstruction = true;
+	}
+
 	if (value & 0x80) {
 		// Reset: abandon a partial sequence and force the PRG mode back to
 		// "last bank fixed high", so the vectors are reachable again.
