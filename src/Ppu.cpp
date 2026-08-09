@@ -2,6 +2,19 @@
 
 namespace nes {
 
+namespace {
+/*
+ * How far past the vblank flag going up a $2002 read still changes the outcome.
+ *
+ * Reading on the same dot returns the flag clear and loses the interrupt;
+ * reading one dot later returns it set and still loses the interrupt, because
+ * the /NMI line went down and came back up inside a single dot and the CPU
+ * never sampled it. Two dots on, nothing is unusual any more. Anything at or
+ * above this is simply "not near the boundary".
+ */
+const int VBLANK_RACE_DOTS = 2;
+} // namespace
+
 /*
  * The console's fixed 64-colour palette, as 0x00RRGGBB.
  *
@@ -55,6 +68,9 @@ void Ppu::reset() {
 	m_frame = 0;
 	m_nmiPending = false;
 	m_sprite0HitDot = -1;
+	m_dotsSinceVblank = VBLANK_RACE_DOTS;
+	m_suppressVblank = false;
+	m_vblankRaces = 0;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -126,13 +142,24 @@ void Ppu::tickOne() {
 			copyVerticalBits();
 	}
 
+	if (m_dotsSinceVblank < VBLANK_RACE_DOTS)
+		m_dotsSinceVblank++;
+
 	if (m_dot != 1)
 		return;
 
 	if (m_scanline == VBLANK_SCANLINE) {
-		m_status |= STATUS_VBLANK;
-		if (m_ctrl & CTRL_NMI_ENABLE)
-			m_nmiPending = true;
+		m_dotsSinceVblank = 0;
+		if (m_suppressVblank) {
+			// A $2002 read landed on the dot before this one. On hardware the
+			// read wins outright: the flag never comes up at all, and with it
+			// no interrupt. The frame is otherwise ordinary.
+			m_suppressVblank = false;
+		} else {
+			m_status |= STATUS_VBLANK;
+			if (m_ctrl & CTRL_NMI_ENABLE)
+				m_nmiPending = true;
+		}
 	} else if (preRender) {
 		m_status &= static_cast<std::uint8_t>(
 				~(STATUS_VBLANK | STATUS_SPRITE0 | STATUS_OVERFLOW));
@@ -174,9 +201,15 @@ void Ppu::copyVerticalBits() {
 /* Rendering                                                                  */
 /* ------------------------------------------------------------------------- */
 
-void Ppu::renderScanline(int line) {
+void Ppu::renderScanline(int line, int fromX) {
 	std::uint8_t* row = m_framebuffer.data() + line * SCREEN_WIDTH;
-	m_sprite0HitDot = -1;
+	const bool wholeLine = fromX <= 0;
+	if (fromX < 0)
+		fromX = 0;
+	if (fromX >= SCREEN_WIDTH)
+		return;
+	if (wholeLine)
+		m_sprite0HitDot = -1;
 
 	// Two-bit pattern value per pixel; 0 means transparent / backdrop.
 	std::uint8_t bgPattern[SCREEN_WIDTH] = { 0 };
@@ -186,7 +219,7 @@ void Ppu::renderScanline(int line) {
 		const std::uint16_t patternBase = (m_ctrl & CTRL_BG_PATTERN) ? 0x1000 : 0x0000;
 		const int fineY = (m_vramAddr >> 12) & 7;
 
-		for (int x = 0; x < SCREEN_WIDTH; x++) {
+		for (int x = fromX; x < SCREEN_WIDTH; x++) {
 			const int bit = m_fineX + x;
 			// Which tile along the row, and which of its 8 columns.
 			int coarseX = (m_vramAddr & 0x1F) + (bit >> 3);
@@ -218,17 +251,26 @@ void Ppu::renderScanline(int line) {
 		}
 
 		if (!(m_mask & MASK_SHOW_BG_LEFT))
-			for (int x = 0; x < 8; x++)
+			for (int x = fromX; x < 8; x++)
 				bgPattern[x] = 0;
 	}
 
-	// Sprites: hardware evaluates at most 8 per line, in OAM order.
-	std::uint8_t sprPattern[SCREEN_WIDTH] = { 0 };
-	std::uint8_t sprAttribute[SCREEN_WIDTH] = { 0 };
-	bool sprBehind[SCREEN_WIDTH] = { false };
-	bool sprIsZero[SCREEN_WIDTH] = { false };
+	// Sprites are evaluated once per line and do not move partway across it:
+	// hardware picks them during the previous line and latches their patterns,
+	// so a redraw of the tail reuses what was found at the start.
+	std::uint8_t* sprPattern = m_sprPattern.data();
+	std::uint8_t* sprAttribute = m_sprAttribute.data();
+	bool* sprBehind = m_sprBehind.data();
+	bool* sprIsZero = m_sprIsZero.data();
 
-	if (m_mask & MASK_SHOW_SPRITES) {
+	if (wholeLine) {
+		m_sprPattern.fill(0);
+		m_sprAttribute.fill(0);
+		m_sprBehind.fill(false);
+		m_sprIsZero.fill(false);
+	}
+
+	if (wholeLine && (m_mask & MASK_SHOW_SPRITES)) {
 		const int height = (m_ctrl & CTRL_SPRITE_SIZE_16) ? 16 : 8;
 		int found = 0;
 
@@ -294,13 +336,18 @@ void Ppu::renderScanline(int line) {
 				sprPattern[x] = 0;
 	}
 
-	for (int x = 0; x < SCREEN_WIDTH; x++) {
+	for (int x = fromX; x < SCREEN_WIDTH; x++) {
 		const bool bgOpaque = bgPattern[x] != 0;
 		const bool sprOpaque = sprPattern[x] != 0;
 
 		// Sprite zero overlapping opaque background is how games find the split
 		// point for a status bar. It is never reported on the last pixel.
-		if (sprOpaque && bgOpaque && sprIsZero[x] && x != 255 && m_sprite0HitDot < 0)
+		//
+		// Only looked for on the first pass. A redraw of the tail happens
+		// because the game already acted on the hit, and re-reporting it from
+		// the redrawn pixels would feed the game's own response back to it.
+		if (wholeLine && sprOpaque && bgOpaque && sprIsZero[x] && x != 255
+				&& m_sprite0HitDot < 0)
 			m_sprite0HitDot = x;
 
 		std::uint8_t colour;
@@ -315,6 +362,43 @@ void Ppu::renderScanline(int line) {
 
 		row[x] = static_cast<std::uint8_t>(colour & 0x3F);
 	}
+}
+
+void Ppu::redrawRestOfLine() {
+	if (m_scanline >= SCREEN_HEIGHT)
+		return;
+	// Pixel x is produced at dot x + 1, so at dot D the pixels from D - 1 on
+	// have not been drawn yet and are the ones this write still governs.
+	if (m_dot < 2 || m_dot > SCREEN_WIDTH)
+		return;
+
+	renderScanline(m_scanline, m_dot - 1);
+}
+
+bool Ppu::lightAt(int x, int y) const {
+	if (x < 0 || y < 0 || x >= SCREEN_WIDTH || y >= SCREEN_HEIGHT)
+		return false;
+
+	const std::uint32_t rgb =
+			nesPaletteRgb()[m_framebuffer[y * SCREEN_WIDTH + x] & 0x3F];
+	const int r = (rgb >> 16) & 0xFF;
+	const int g = (rgb >> 8) & 0xFF;
+	const int b = rgb & 0xFF;
+
+	// Rec. 601 luma, the weighting the composite signal itself carries, and so
+	// what a sensor watching that signal responds to.
+	const int luma = (r * 299 + g * 587 + b * 114) / 1000;
+
+	// Near-white only. The threshold has to clear every bright colour a game
+	// puts on screen as scenery, and those go higher than they look: Duck
+	// Hunt's foliage green is luma 172 and its lightest grey is 171. A game
+	// blanks the screen and asks whether the gun sees anything before it
+	// believes a shot at all, so a background counted as light does not merely
+	// score wrongly -- it makes every shot fail that check and be discarded.
+	//
+	// What a game does strobe at a target is $30 or $20, both pure white at
+	// 255, which leaves plenty of room above the scenery.
+	return luma >= 200;
 }
 
 bool Ppu::takeNmi() {
@@ -332,8 +416,32 @@ std::uint8_t Ppu::readRegister(std::uint16_t reg) {
 	case 2: {
 		// Only the top three bits come from the status register; the rest are
 		// whatever was last on the PPU data bus.
+		std::uint8_t status = m_status;
+
+		// The race at the top of vblank. Three dots decide it, and the CPU is
+		// on the losing side of all three: whatever the flag reads back as, the
+		// interrupt does not happen. Games that poll $2002 for vblank instead
+		// of using the NMI are unaffected, which is why so few notice.
+		if (m_scanline == VBLANK_SCANLINE && m_dot == 0) {
+			// One dot early: the flag has not come up yet, and now it never
+			// will. tick() sees this and skips the whole thing.
+			m_suppressVblank = true;
+			m_vblankRaces++;
+		} else if (m_dotsSinceVblank == 0) {
+			// The same dot. The read and the flag collide, and the read comes
+			// away with nothing -- bit 7 clear, no interrupt.
+			status &= static_cast<std::uint8_t>(~STATUS_VBLANK);
+			m_nmiPending = false;
+			m_vblankRaces++;
+		} else if (m_dotsSinceVblank == 1) {
+			// One dot late: the flag is genuinely up and reads back set, but
+			// clearing it here pulls /NMI up again before the CPU sampled it.
+			m_nmiPending = false;
+			m_vblankRaces++;
+		}
+
 		const std::uint8_t value =
-				static_cast<std::uint8_t>((m_status & 0xE0) | (m_openBus & 0x1F));
+				static_cast<std::uint8_t>((status & 0xE0) | (m_openBus & 0x1F));
 		m_status &= static_cast<std::uint8_t>(~STATUS_VBLANK);
 		m_writeToggle = false;   // $2002 resets the $2005/$2006 sequence
 		m_openBus = value;
@@ -371,7 +479,12 @@ void Ppu::writeRegister(std::uint16_t reg, std::uint8_t value) {
 	switch (reg & 7) {
 	case 0: {
 		const bool wasEnabled = (m_ctrl & CTRL_NMI_ENABLE) != 0;
+		const bool patternMoved = ((value ^ m_ctrl) & CTRL_BG_PATTERN) != 0;
 		m_ctrl = value;
+		// Only the background pattern-table bit reaches the line being drawn.
+		// The nametable select goes to t, which the line has already read.
+		if (patternMoved)
+			redrawRestOfLine();
 		// Enabling NMI while the vblank flag is already up fires one
 		// immediately. Some games rely on this to start their frame loop.
 		if (!wasEnabled && (value & CTRL_NMI_ENABLE) && (m_status & STATUS_VBLANK))
@@ -380,9 +493,16 @@ void Ppu::writeRegister(std::uint16_t reg, std::uint8_t value) {
 				| ((value & 0x03) << 10));   // nametable select -> t
 		break;
 	}
-	case 1:
+	case 1: {
+		// Every bit of this register lands on the pixels being drawn right now:
+		// what is shown, what is masked off at the left edge, greyscale and the
+		// colour emphasis.
+		const bool changed = value != m_mask;
 		m_mask = value;
+		if (changed)
+			redrawRestOfLine();
 		break;
+	}
 	case 3:
 		m_oamAddr = value;
 		break;
@@ -391,8 +511,14 @@ void Ppu::writeRegister(std::uint16_t reg, std::uint8_t value) {
 		break;
 	case 5:
 		if (!m_writeToggle) {
+			// Fine X is the one part of a $2005 write the current line sees --
+			// it feeds the pixel multiplexer directly. Coarse X goes to t and
+			// only reaches v at the end of the line.
+			const bool fineXMoved = (value & 0x07) != m_fineX;
 			m_fineX = value & 0x07;
 			m_tempAddr = static_cast<std::uint16_t>((m_tempAddr & 0xFFE0) | (value >> 3));
+			if (fineXMoved)
+				redrawRestOfLine();
 		} else {
 			m_tempAddr = static_cast<std::uint16_t>((m_tempAddr & 0x8FFF)
 					| ((value & 0x07) << 12));
@@ -407,7 +533,12 @@ void Ppu::writeRegister(std::uint16_t reg, std::uint8_t value) {
 					| ((value & 0x3F) << 8));   // high byte first, 14 bits total
 		} else {
 			m_tempAddr = static_cast<std::uint16_t>((m_tempAddr & 0xFF00) | value);
+			// The second write drops straight into v, so the rest of the line
+			// is fetched from somewhere else entirely.
+			const bool moved = m_vramAddr != m_tempAddr;
 			m_vramAddr = m_tempAddr;
+			if (moved)
+				redrawRestOfLine();
 		}
 		m_writeToggle = !m_writeToggle;
 		break;

@@ -45,6 +45,20 @@ class Mapper {
 public:
 	virtual ~Mapper() = default;
 
+	/**
+	 * A new CPU instruction is about to run.
+	 *
+	 * Serial boards care how close together two writes land. MMC1 ignores one
+	 * that arrives on the cycle straight after another, which is exactly what
+	 * the second half of a read-modify-write is. Nothing here counts cycles,
+	 * but it does not need to: the only way one 6502 instruction writes to the
+	 * cartridge twice is that pair, so "second write of this instruction" and
+	 * "write on the very next cycle" name the same event.
+	 *
+	 * Boards with a properly decoded register have no opinion and ignore this.
+	 */
+	virtual void beginInstruction() { }
+
 	/** CPU bus read, $4020-$FFFF. Returns open-bus (0) for unmapped addresses. */
 	virtual std::uint8_t cpuRead(std::uint16_t address) const = 0;
 	/** CPU bus write, $4020-$FFFF. Bank switching happens here on most boards. */
@@ -293,9 +307,12 @@ private:
  * address of that last write. A write with bit 7 set resets the sequence -- the
  * standard way out of a partial write, and what a game does on startup.
  *
- * That serial protocol is why MMC1 games avoid read-modify-write instructions
- * on $8000-$FFFF: some 6502 opcodes write twice, which shifts in a bit nobody
- * intended.
+ * The board defends that protocol against the 6502's own quirk. A
+ * read-modify-write instruction writes twice, the unmodified byte and then the
+ * result, on consecutive cycles; MMC1 takes the first and ignores the second.
+ * So `DEC $8000` shifts in a bit of the value that was *already there*, not of
+ * the decremented one -- and a handful of games, Bill & Ted's among them, are
+ * written expecting precisely that.
  */
 class Mmc1Mapper : public BankedMapper {
 public:
@@ -303,6 +320,11 @@ public:
 			Mirroring mirroring, bool fourScreen = false);
 
 	int number() const override { return 1; }
+
+	void beginInstruction() override {
+		m_instructionsKnown = true;
+		m_wroteThisInstruction = false;
+	}
 
 protected:
 	std::size_t prgOffset(std::uint16_t address) const override;
@@ -314,6 +336,15 @@ private:
 	void applyMirroring();
 
 	std::uint8_t m_shift;     // holds a walking 1 that marks the fifth write
+
+	// The rule is really about cycles, and the mapper cannot see cycles. It can
+	// see instruction boundaries, if whoever drives it reports them -- and one
+	// instruction writing twice is the only way two writes end up adjacent.
+	// Until somebody reports a boundary there is nothing to reason from, so
+	// every write is taken at face value rather than guessed at.
+	bool m_instructionsKnown;
+	bool m_wroteThisInstruction;
+
 	std::uint8_t m_control;
 	std::uint8_t m_chrBank0;
 	std::uint8_t m_chrBank1;

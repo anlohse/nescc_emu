@@ -243,3 +243,157 @@ TEST_CASE("a_program_reads_the_pad_the_way_a_game_does") {
 	// A in bit 7, Start in bit 4: 1001 0000.
 	CHECK_EQ(console.bus().peek(0x0010), 0x90);
 }
+
+/* ------------------------------------------------------------------------ */
+/* The Zapper                                                                */
+/* ------------------------------------------------------------------------ */
+
+/*
+ * A light gun is not a pad with different buttons. It has no shift register at
+ * all: it answers a read of its port with two bits of level, ignores the
+ * strobe, and both of those bits are inverted. Every one of those is a way to
+ * get it wrong that a game would notice immediately.
+ */
+
+TEST_CASE("a_port_holds_a_pad_until_something_says_otherwise") {
+	Controller controller;
+	CHECK_EQ(controller.device(), Controller::DEVICE_PAD);
+	CHECK_FALSE(controller.zapperOnScreen());
+}
+
+TEST_CASE("an_aim_point_off_the_picture_is_a_real_answer") {
+	// Pointing the gun away from the television is how a player cheats at Duck
+	// Hunt, and the game checks for it. Negative coordinates have to survive
+	// rather than being clamped onto the screen.
+	Controller gun;
+	gun.setDevice(Controller::DEVICE_ZAPPER);
+
+	gun.setZapper(128, 100, false);
+	CHECK(gun.zapperOnScreen());
+	CHECK_EQ(gun.zapperX(), 128);
+	CHECK_EQ(gun.zapperY(), 100);
+
+	gun.setZapper(-1, -1, true);
+	CHECK_FALSE(gun.zapperOnScreen());
+	CHECK(gun.zapperTrigger());
+}
+
+TEST_CASE("the_light_bit_is_clear_when_light_is_seen") {
+	// Inverted, because the phototransistor pulls the line down on a hit. Get
+	// this backwards and Duck Hunt scores a miss for every shot on target and a
+	// hit for every shot at the sky.
+	Nes console;
+	std::vector<std::uint8_t> prg;
+	testrom::setResetVector(prg, 0xC000);
+	auto cart = Cartridge::fromINes(testrom::build(testrom::Options(), prg));
+	REQUIRE(cart != nullptr);
+	console.setCartridge(std::move(cart));
+	console.reset();
+
+	console.controller(1).setDevice(Controller::DEVICE_ZAPPER);
+
+	// The framebuffer powers up black, so nothing is lit anywhere.
+	console.controller(1).setZapper(100, 50, false);
+	std::uint8_t value = console.bus().read(0x4017);
+	CHECK((value & Controller::ZAPPER_LIGHT) != 0);      // set: no light
+	CHECK((value & Controller::ZAPPER_TRIGGER) != 0);    // set: at rest
+
+	// Aim somewhere off the picture: still no light, whatever is on screen.
+	console.controller(1).setZapper(-1, -1, true);
+	value = console.bus().read(0x4017);
+	CHECK((value & Controller::ZAPPER_LIGHT) != 0);
+	CHECK((value & Controller::ZAPPER_TRIGGER) == 0);    // clear: pulled
+}
+
+TEST_CASE("a_bright_pixel_pulls_the_light_bit_down") {
+	Nes console;
+	std::vector<std::uint8_t> prg;
+	testrom::setResetVector(prg, 0xC000);
+	testrom::Options o;
+	o.chrBanks = 0;                       // CHR RAM, so patterns can be written
+	auto cart = Cartridge::fromINes(testrom::build(o, prg));
+	REQUIRE(cart != nullptr);
+	console.setCartridge(std::move(cart));
+	console.reset();
+
+	Ppu& ppu = console.ppu();
+
+	// Paint the backdrop white and let a frame be drawn with rendering off, so
+	// the whole picture becomes the backdrop colour.
+	ppu.vramWrite(0x3F00, 0x30);          // $30 is white in the NES palette
+	while (ppu.frame() == 0)
+		ppu.tick(1);
+	ppu.tick(Ppu::DOTS_PER_SCANLINE * (Ppu::SCREEN_HEIGHT + 1));
+
+	REQUIRE(ppu.lightAt(100, 50));
+	CHECK_FALSE(ppu.lightAt(-1, 50));     // off the picture is never lit
+	CHECK_FALSE(ppu.lightAt(100, 400));
+
+	console.controller(1).setDevice(Controller::DEVICE_ZAPPER);
+	console.controller(1).setZapper(100, 50, true);
+	const std::uint8_t value = console.bus().read(0x4017);
+	CHECK((value & Controller::ZAPPER_LIGHT) == 0);      // clear: light seen
+	CHECK((value & Controller::ZAPPER_TRIGGER) == 0);    // clear: pulled
+}
+
+TEST_CASE("a_dark_colour_is_not_light") {
+	Nes console;
+	std::vector<std::uint8_t> prg;
+	testrom::setResetVector(prg, 0xC000);
+	auto cart = Cartridge::fromINes(testrom::build(testrom::Options(), prg));
+	REQUIRE(cart != nullptr);
+	console.setCartridge(std::move(cart));
+	console.reset();
+
+	Ppu& ppu = console.ppu();
+	// Sky blue: a very common background, and it must not read as a hit or
+	// every shot anywhere would score.
+	ppu.vramWrite(0x3F00, 0x21);
+	while (ppu.frame() == 0)
+		ppu.tick(1);
+	ppu.tick(Ppu::DOTS_PER_SCANLINE * (Ppu::SCREEN_HEIGHT + 1));
+	CHECK_FALSE(ppu.lightAt(100, 50));
+}
+
+TEST_CASE("a_light_gun_ignores_the_strobe") {
+	// A pad latches on the strobe and shifts a bit out per read. A Zapper has
+	// no register to latch: the same two bits come back however often it is
+	// read and whatever is written to $4016.
+	Nes console;
+	std::vector<std::uint8_t> prg;
+	testrom::setResetVector(prg, 0xC000);
+	auto cart = Cartridge::fromINes(testrom::build(testrom::Options(), prg));
+	REQUIRE(cart != nullptr);
+	console.setCartridge(std::move(cart));
+	console.reset();
+
+	console.controller(1).setDevice(Controller::DEVICE_ZAPPER);
+	console.controller(1).setZapper(10, 10, true);
+
+	console.bus().write(0x4016, 1);
+	console.bus().write(0x4016, 0);
+	const std::uint8_t first = console.bus().read(0x4017);
+	for (int i = 0; i < 8; i++)
+		CHECK_EQ(console.bus().read(0x4017), first);
+}
+
+TEST_CASE("port_one_is_still_a_pad_when_port_two_holds_a_gun") {
+	// Duck Hunt reads both: the pad starts the game, the gun plays it.
+	Nes console;
+	std::vector<std::uint8_t> prg;
+	testrom::setResetVector(prg, 0xC000);
+	auto cart = Cartridge::fromINes(testrom::build(testrom::Options(), prg));
+	REQUIRE(cart != nullptr);
+	console.setCartridge(std::move(cart));
+	console.reset();
+
+	console.controller(1).setDevice(Controller::DEVICE_ZAPPER);
+	console.controller(0).setButtons(Controller::BUTTON_START);
+
+	console.bus().write(0x4016, 1);
+	console.bus().write(0x4016, 0);
+	CHECK_EQ(console.bus().read(0x4016) & 1, 0);   // A
+	CHECK_EQ(console.bus().read(0x4016) & 1, 0);   // B
+	CHECK_EQ(console.bus().read(0x4016) & 1, 0);   // Select
+	CHECK_EQ(console.bus().read(0x4016) & 1, 1);   // Start
+}

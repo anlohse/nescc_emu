@@ -29,6 +29,13 @@ struct Config {
 	bool fullscreen = false;
 	bool audio = true;
 
+	// Which plugin to use for each job, by id. Empty means "whichever is first",
+	// which is also what happens when the named one is not installed -- a config
+	// naming a plugin that has since been removed should still start.
+	std::string videoPlugin;
+	std::string audioPlugin;
+	std::string inputPlugin;
+
 	/** The defaults, which are also what gets written on a first run. */
 	static Config defaults();
 

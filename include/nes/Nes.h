@@ -66,10 +66,11 @@ public:
 	 * Advance the system by one CPU instruction.
 	 *
 	 * Drains any OAM DMA stall first, then executes an instruction (or services
-	 * a pending interrupt), then ticks the PPU by three dots per CPU cycle and
-	 * the APU by one, and forwards the NMI or IRQ they raised. That ordering is
-	 * what makes the console a system rather than a CPU with peripherals bolted
-	 * on.
+	 * a pending interrupt), then forwards the NMI or IRQ that raised. The PPU
+	 * and APU are advanced by NesBus as the instruction makes its accesses,
+	 * rather than in one lump afterwards, so a device is sampled at the cycle
+	 * its access happens. That ordering is what makes the console a system
+	 * rather than a CPU with peripherals bolted on.
 	 *
 	 * @return the number of CPU cycles consumed.
 	 */
@@ -113,13 +114,6 @@ private:
 	std::string m_savePath;
 
 	Region m_region;
-	// PPU dots per CPU cycle as a fraction: 3/1 on NTSC, 16/5 on PAL. PAL's
-	// ratio is not a whole number, so the leftover has to be carried between
-	// steps rather than rounded away -- rounding would drift a whole scanline
-	// every few hundred instructions.
-	int m_dotNumerator;
-	int m_dotDenominator;
-	int m_dotRemainder;
 };
 
 } // namespace nes

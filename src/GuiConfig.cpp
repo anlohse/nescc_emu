@@ -134,6 +134,8 @@ bool Config::load(const std::string& file, std::string* warnings) {
 			} else if (key == "fullscreen") {
 				if (!parseBool(value, &fullscreen))
 					warn(warnings, where + "fullscreen must be true or false");
+			} else if (key == "plugin") {
+				videoPlugin = value;
 			} else {
 				warn(warnings, where + "unknown setting '" + key + "'");
 			}
@@ -144,9 +146,19 @@ bool Config::load(const std::string& file, std::string* warnings) {
 			if (key == "enabled") {
 				if (!parseBool(value, &audio))
 					warn(warnings, where + "enabled must be true or false");
+			} else if (key == "plugin") {
+				audioPlugin = value;
 			} else {
 				warn(warnings, where + "unknown setting '" + key + "'");
 			}
+			continue;
+		}
+
+		if (section == "input") {
+			if (key == "plugin")
+				inputPlugin = value;
+			else
+				warn(warnings, where + "unknown setting '" + key + "'");
 			continue;
 		}
 
@@ -201,13 +213,23 @@ bool Config::save(const std::string& file) const {
 	   << "# dpleft, dpright, leftshoulder, rightshoulder.\n"
 	   << "\n";
 
+	os << "# Each job is done by a plugin. Leaving one blank takes whichever is\n"
+	   << "# first, which is also what happens if the named one is not installed.\n"
+	   << "\n";
+
 	os << "[video]\n"
+	   << "plugin = " << videoPlugin << "\n"
 	   << "scale = " << scale << "\n"
 	   << "fullscreen = " << (fullscreen ? "true" : "false") << "\n"
 	   << "\n";
 
 	os << "[audio]\n"
+	   << "plugin = " << audioPlugin << "\n"
 	   << "enabled = " << (audio ? "true" : "false") << "\n"
+	   << "\n";
+
+	os << "[input]\n"
+	   << "plugin = " << inputPlugin << "\n"
 	   << "\n";
 
 	for (int port = 0; port < 2; port++) {

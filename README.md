@@ -16,21 +16,30 @@ that keeps the status bar fixed while the level moves beneath it all work.
 | Region | NTSC and PAL, read from the header and applied to every clock |
 | Mapper IRQ | MMC3's scanline counter, merged with the APU onto one CPU line |
 | Bus conflicts | on the discrete boards, when the NES 2.0 submapper declares them |
+| MMC1 serial port | five-bit shift register, with the consecutive-write rule applied |
 | CPU bus | RAM + mirroring, PPU/cartridge routing, `peek()` for debuggers |
+| Device timing | the PPU and APU advance per bus access, so a register is read at the cycle it is read at |
 | CPU | emu6502, which passes Klaus Dormann's functional test |
-| PPU timing | dot/scanline/frame counters, vblank, NMI, odd-frame dot skip |
+| PPU timing | dot/scanline/frame counters, vblank, NMI, odd-frame dot skip, the `$2002` race |
 | PPU registers | full register file: write toggle, buffered `$2007`, auto-increment |
 | PPU memory | VRAM with nametable mirroring, palette mirroring, CHR via the mapper |
 | Mirroring | horizontal, vertical, four-screen, both single-screen modes; switchable at runtime |
 | Background rendering | tiles, attributes, fine and coarse scroll across nametables |
+| Mid-line changes | scroll, mask and pattern-table writes redraw the rest of the line |
 | Sprite rendering | 8x8 and 8x16, flipping, priority, 8-per-line limit, overflow |
 | Sprite-zero hit | reported at the dot of overlap, so mid-frame splits work |
 | OAM DMA (`$4014`) | copies the page and stalls the CPU 513 cycles |
 | Controllers (`$4016/$4017`) | both ports, latch and shift register, open bus in the high bits |
+| Zapper | the mouse as a light gun on port two: light sensed from the picture, both bits active low |
 | Battery saves | `.sav` beside the ROM, loaded on start, written on exit and reset |
 | APU channels | two pulses with sweep, triangle, noise, DMC — all five |
 | APU frame counter | 4- and 5-step sequences, quarter/half clocks, frame IRQ |
 | APU mixing | the hardware's nonlinear curve, high-pass and anti-alias filtering |
+| Backends | video, audio, input and clock behind interfaces; SDL is one implementation |
+| Plugin ABI | C boundary with a version handshake; the SDL backends already go through it |
+| Loadable plugins | `plugins/audio_sdl` is a real shared library; a module shadows the built-in of the same id |
+| Plugin chooser | `F1`, or `--settings` with no ROM: pick a plugin per job, saved to `nes.cfg` |
+| Rebinding | the controller plugin's own dialog: press Bind, then press the key or pad button |
 | Window | `nes_gui`: SDL2 video and audio, keyboard, paced to NTSC's 60.0988 Hz |
 | Headless runner | `nes_run`: tracing, scripted input, PPM screenshots, WAV capture |
 
@@ -39,9 +48,49 @@ that keeps the status bar fixed while the level moves beneath it all work.
 ```
 include/nes/     public headers
 src/             Cartridge (iNES), Mapper (seven boards), Ppu, Apu, Controller,
-                 NesBus, Nes, main.cpp (headless runner), gui_main.cpp (SDL2 window)
+                 NesBus, Nes, main.cpp (headless runner)
+src/plugin/      nes_plugin.h -- the C plugin ABI: version, descriptor, api structs
+                 PluginHost   -- registry, version handshake, C-to-C++ adapters
+                 Module       -- LoadLibrary/dlopen behind RAII, typed creation
+src/plugins/     audio_sdl -- the first backend to leave the executable
+src/frontend/    Backend.h  -- video, audio, input and clock as abstract classes
+                 App.cpp    -- the run loop, written against those and nothing else
+                 SdlBackend -- one SDL implementation of each
+                 SdlPlugin  -- those, exported through the C ABI
+                 gui_main.cpp is now only wiring: parse, init, select, run
 test_src/        doctest suite, including the nestest harness
 ```
+
+The four interfaces in `frontend/Backend.h` are the seam between the emulator and
+the machine it runs on. Everything host-shaped -- a window, a sound device, a
+person pressing keys, a wall clock -- arrives through one of them, so the run
+loop contains no SDL and `nes_gui_test` drives the whole thing with doubles: no
+window, no device, and time that only moves when the test says so.
+
+Underneath them is a C plugin ABI in `src/plugin/nes_plugin.h`. Video, audio and
+input each reach the run loop through it, and the SDL implementations are already
+plugins in every sense except that they are still compiled in rather than loaded:
+the same version handshake, the same descriptor, the same struct of function
+pointers a shared library will export. Exercising the boundary on every run is what
+keeps it from rotting while nothing external uses it yet.
+
+Audio has already left the executable: `plugins/audio_sdl` is a real shared library,
+loaded from a folder beside the program, and a module found there shadows the
+built-in with the same id. Delete it and the emulator falls back and still makes
+sound. Video and input are still compiled in, for a reason worth knowing --
+
+The host owns the window and the event pump. That is not an accident of this
+implementation: one platform event queue carries window, keyboard and pad events
+together, so two separately loaded modules cannot both own it.
+
+The lifetime rule is the other thing to know before writing a plugin. An instance
+keeps its library mapped, because every function it calls lives inside that library;
+`Module::create<T>()` hands each new object a reference to its own module rather than
+relying on something staying in scope. And because a C api struct carries no RTTI, the
+kind is checked against the descriptor at run time -- a cast would happily reinterpret
+an audio plugin as a video one and crash later.
+
+[ROADMAP.md](ROADMAP.md) has the four stages and the constraints that shaped them.
 
 ## Building
 
@@ -125,12 +174,25 @@ converts both directions, so the names it writes are exactly the names it reads 
 A binding it does not recognise is reported and skipped rather than rejecting the file:
 one typo costs that binding, not the rest of your setup.
 
+Or press `F1` and open the controller plugin's own dialog, where a binding is set by
+pressing the key or gamepad button you want it on. Anything else in the same group that
+already had it is released. Printable keys go through your keyboard layout, so a
+non-US board binds the key you actually pressed rather than the one in that place on a
+US one.
+
 Command-line options win over the file. Delete it to get the defaults back.
 
 `P` or `Space` pauses, `N` advances one frame while paused, `M` mutes, holding `Tab`
-runs unthrottled, `R` resets, `F12` saves a screenshot, `Esc` quits. `--scale=N` sets
+runs unthrottled, `R` resets, `F1` opens the plugin chooser, `F12` saves a screenshot,
+`Esc` quits. `--scale=N` sets
 the window size, `--fullscreen` starts borderless, `--no-audio` runs silent; the picture
 letterboxes to the NES's aspect at any window size, with nearest-neighbour scaling.
+
+A light-gun game plays with the mouse: aim in the window and click. The cursor is hidden
+over the picture — it sits exactly where you are aiming, which is the one place you need
+to see — and stays visible on the title bar and in every dialog. Where the picture is on
+screen is the video plugin's business, so the host asks it to turn the mouse position
+into a console pixel; a controller plugin never has to know what is drawing.
 
 Audio is 44.1 kHz mono, queued rather than driven from a callback thread — the emulator
 produces samples in frame-sized bursts on the main thread, and the device's own buffer
@@ -213,6 +275,16 @@ to be seen, because a game samples the pad once per frame in its NMI handler. `P
 
 Buttons are `a`, `b`, `select`, `start`, `up`, `down`, `left`, `right`. Overlapping
 presses combine, so `--press=right@100:60 --press=b@100:60` is a run.
+
+The Zapper is scripted the same way, with `--shoot=X,Y@FRAME[:HELD]` in console pixels:
+
+```bash
+./build/bin/Release/nes_run duckhunt.nes --press=start@60 --press=start@200 --shoot=237,124@980:12 --frames=1040 --screenshot=hit.ppm
+```
+
+Giving any `--shoot` plugs a gun into port two instead of a pad. The trigger has to be
+held across several frames, because the game blanks the screen for a frame after it is
+pulled and only then looks for light.
 
 ## Testing
 
@@ -319,9 +391,6 @@ Nyquist folds back down as noise.
   on UxROM, CNROM and AxROM means the board has them; 1 means it does not; iNES 1.0 has
   nowhere to say and so is treated as not. Nothing is inferred from the mapper number
   alone, because a wrong guess does not fail loudly — it quietly selects the wrong bank.
-- **MMC1 accepts consecutive writes.** Hardware ignores the second write of a
-  read-modify-write pair, because it arrives on the very next cycle; this does not, so a
-  game using `INC $8000` on the register would behave differently.
 - **Saves are written on exit and on reset, not continuously.** Closing the window or
   pressing `R` keeps your game; killing the process loses whatever was written since
   the last of those.
@@ -346,9 +415,11 @@ Nyquist folds back down as noise.
   the right CPU cycles, but the `$4017` write delay is approximated, and the DMC charges
   a flat 4 cycles per fetch where hardware varies with what the CPU was doing. Music and
   effects are right; a test ROM measuring the sequencer to the cycle would not be.
-- **Scanline-granular rendering.** Each line is drawn from the scroll state at its
-  start, so per-line raster effects work but mid-line scroll changes do not. That is
-  enough for most games and not enough for a few.
+- **Rendering is not a per-dot pipeline.** A line is drawn from the state at its start
+  and redrawn from partway across when a write changes the rest of it, which covers
+  mid-line scroll, mask and pattern-table changes. What it does not model is hardware's
+  two-tile fetch latency, so a change takes effect at the pixel the write lands on
+  rather than a tile or two later.
 - **Sprite overflow is set by the real 8-per-line rule**, not by hardware's buggy
   evaluation, which both over- and under-reports on real silicon.
 - **MMC3's counter is clocked once per scanline**, at dot 260, where the sprite fetches
@@ -381,11 +452,9 @@ view, including the backend-interface design and what would be needed for a 1.0.
    the undocumented opcodes and exact cycle counts against a reference. The `blargg`
    APU and MMC3 test ROMs are the equivalent gates for sound and for the scanline
    counter, and would settle how much the timing approximations above actually matter.
-3. A decimal-mode switch in emu6502: the 2A03 ignores the `D` flag in `ADC`/`SBC`, and
+2. A decimal-mode switch in emu6502: the 2A03 ignores the `D` flag in `ADC`/`SBC`, and
    the core currently implements full BCD.
-4. Save states — the console's whole state is a handful of plain structs, so this is
+3. Save states — the console's whole state is a handful of plain structs, so this is
    mostly a serialisation exercise, and it makes debugging the harder games practical.
-5. MMC1's consecutive-write rule — hardware ignores the second write of a
-   read-modify-write pair, and this does not.
-6. Famicom expansion audio, if a cart that uses it ever turns up. VRC6 is the usual
+4. Famicom expansion audio, if a cart that uses it ever turns up. VRC6 is the usual
    first one, and it would mean letting a mapper contribute to the APU's mix.

@@ -415,6 +415,119 @@ TEST_CASE("mmc1_switches_character_banks_in_both_modes") {
 }
 
 /* ------------------------------------------------------------------------ */
+/* MMC1's consecutive-write rule                                             */
+/* ------------------------------------------------------------------------ */
+
+/*
+ * The board takes one write per five-bit sequence and needs a gap between them.
+ * A read-modify-write instruction does not leave one: it writes the unmodified
+ * byte and then the result, on back-to-back cycles, and MMC1 keeps only the
+ * first. So an RMW against $8000-$FFFF loads a bit of what was already at that
+ * address rather than of what the instruction computed.
+ */
+
+TEST_CASE("mmc1_ignores_the_second_write_of_a_pair") {
+	auto cart = makeCart(1, 8, 0);
+
+	// Five instructions, each writing twice. Only the first of each pair lands,
+	// so the register loads 0b11111 rather than something built from all ten.
+	for (int i = 0; i < 5; i++) {
+		cart->beginInstruction();
+		cart->cpuWrite(0xE000, 1);
+		cart->cpuWrite(0xE000, 0);            // one cycle later: dropped
+	}
+	CHECK_EQ(cart->cpuRead(0x8000), 7);       // 31 wrapped into 8 banks
+
+	// Take the pairs apart and the same ten writes mean something else, which
+	// is what makes the rule observable at all.
+	auto other = makeCart(1, 8, 0);
+	for (int i = 0; i < 5; i++) {
+		other->beginInstruction();
+		other->cpuWrite(0xE000, 1);
+		other->beginInstruction();
+		other->cpuWrite(0xE000, 0);
+	}
+	CHECK_NE(other->cpuRead(0x8000), 7);
+}
+
+TEST_CASE("mmc1_takes_writes_at_face_value_until_told_about_instructions") {
+	// Nothing here counts cycles; the rule needs a driver that reports where
+	// instructions begin. Without one there is no evidence two writes were
+	// adjacent, and inventing some would break every direct caller.
+	auto cart = makeCart(1, 8, 0);
+	for (int i = 0; i < 5; i++)
+		cart->cpuWrite(0xE000, 1);
+	CHECK_EQ(cart->cpuRead(0x8000), 7);
+}
+
+TEST_CASE("boards_with_decoded_registers_take_both_writes") {
+	// MMC3 decodes its registers properly and has no serial protocol to
+	// protect, so the pair is two ordinary writes and the second one wins.
+	auto cart = makeCart(4, 8, 0, BANK_8K);
+	cart->beginInstruction();
+	cart->cpuWrite(0x8000, 6);                // select R6
+	cart->cpuWrite(0x8001, 3);                // same instruction, still lands
+	CHECK_EQ(cart->cpuRead(0x8000), 3);
+}
+
+TEST_CASE("a_read_modify_write_loads_the_byte_that_was_already_there") {
+	// The end-to-end version: a real MMC1 cartridge, real INC instructions, and
+	// the bank that comes out the other side.
+	//
+	// Code sits in the last bank, which mode 3 fixes at $C000 so it stays
+	// reachable whatever the switchable half is doing. Each INC targets a byte
+	// of that same bank whose bit 0 is the bit being shifted in.
+	const int banks = 8;
+	std::vector<std::uint8_t> prg = stamped(banks * BANK_16K, BANK_16K);
+	const std::size_t last = static_cast<std::size_t>(banks - 1) * BANK_16K;
+
+	// $E000-$E004 hold 1,1,1,0,0. Shifted in low bit first that is 0b00111 = 7.
+	// Incremented first they would be 2,2,2,1,1 -- bits 0,0,0,1,1 = 24, which
+	// wraps to bank 0. The two readings are as far apart as eight banks allow.
+	const std::uint8_t bits[5] = { 1, 1, 1, 0, 0 };
+	for (int i = 0; i < 5; i++)
+		prg[last + 0x2000 + i] = bits[i];
+
+	std::size_t p = last;                     // $C000, where execution starts
+	for (int i = 0; i < 5; i++) {
+		prg[p++] = 0xEE;                      // INC $E00i, absolute
+		prg[p++] = static_cast<std::uint8_t>(i);
+		prg[p++] = 0xE0;
+	}
+	prg[p++] = 0x4C;                          // JMP to itself
+	prg[p++] = static_cast<std::uint8_t>((0xC000 + 15) & 0xFF);
+	prg[p++] = 0xC0;
+
+	prg[last + 0x3FFC] = 0x00;                // reset vector -> $C000
+	prg[last + 0x3FFD] = 0xC0;
+
+	testrom::Options o;
+	o.mapper = 1;
+	o.prgBanks = banks;
+	o.chrBanks = 0;
+
+	std::string error;
+	auto cart = Cartridge::fromINes(testrom::build(o, prg), &error);
+	REQUIRE_MESSAGE(cart != nullptr, error);
+	Cartridge* raw = cart.get();
+
+	Nes nes;
+	nes.setCartridge(std::move(cart));
+	nes.reset();
+	REQUIRE_EQ(nes.cpuRegisters().pc, 0xC000);
+
+	for (int i = 0; i < 5; i++)
+		nes.step();
+
+	// $9000 is a stamped byte of whichever bank is switched in low; the code and
+	// the data bytes are elsewhere in the bank, so this still reads the stamp.
+	CHECK_EQ(raw->cpuRead(0x9000), 7);
+
+	// And the ROM is untouched: the writes reached the register, not the chip.
+	CHECK_EQ(raw->cpuRead(0xE000), 1);
+}
+
+/* ------------------------------------------------------------------------ */
 /* Mapper 4: MMC3                                                            */
 /* ------------------------------------------------------------------------ */
 

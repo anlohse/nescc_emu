@@ -38,7 +38,46 @@ public:
 	static const std::uint8_t BUTTON_LEFT   = 0x40;
 	static const std::uint8_t BUTTON_RIGHT  = 0x80;
 
+	/**
+	 * What is plugged into the port.
+	 *
+	 * The console cannot tell: both devices answer the same two pins, and which
+	 * one is there is decided by whoever is holding it. A game knows only
+	 * because it was sold with one in the box.
+	 */
+	enum Device {
+		DEVICE_PAD,
+		/**
+		 * The Zapper: a phototransistor and a trigger, and no shift register at
+		 * all. It answers a read of its port with two bits of level rather than
+		 * a serial stream, so it ignores the strobe entirely.
+		 */
+		DEVICE_ZAPPER
+	};
+
+	/** $4017 bit 3, and it is inverted: clear means light was seen. */
+	static const std::uint8_t ZAPPER_LIGHT   = 0x08;
+	/** $4017 bit 4: set while the trigger is pulled. */
+	static const std::uint8_t ZAPPER_TRIGGER = 0x10;
+
 	Controller();
+
+	void setDevice(Device device) { m_device = device; }
+	Device device() const { return m_device; }
+
+	/**
+	 * Where the gun is pointed and whether the trigger is held.
+	 *
+	 * @param x,y  the pixel aimed at, or negative when the gun is off-screen --
+	 *             pointed away from the television, which is how a player
+	 *             cheats at Duck Hunt and has to read as "no light".
+	 */
+	void setZapper(int x, int y, bool trigger);
+	int zapperX() const { return m_zapperX; }
+	int zapperY() const { return m_zapperY; }
+	bool zapperTrigger() const { return m_zapperTrigger; }
+	/** True when the aim point is somewhere on the screen. */
+	bool zapperOnScreen() const { return m_zapperX >= 0 && m_zapperY >= 0; }
 
 	/**
 	 * Replace the whole button state.
@@ -72,6 +111,11 @@ private:
 	std::uint8_t m_buttons;
 	std::uint8_t m_shift;
 	bool m_strobe;
+
+	Device m_device;
+	int m_zapperX;
+	int m_zapperY;
+	bool m_zapperTrigger;
 };
 
 } // namespace nes

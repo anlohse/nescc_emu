@@ -46,11 +46,21 @@ feature:
 The proposal was to make video, audio and input into plugins. That is really two
 separate ideas, with very different costs.
 
-**An internal abstraction** — `VideoSink`, `AudioSink`, `InputSource` as abstract
-classes, with the current SDL code as one implementation of each — is straightforwardly
-worth doing. It costs about a day, makes the Zapper and gamepad work land cleanly,
-makes the front-end testable without a window, and lets a headless recorder and an SDL
-window be the same program with a different backend selected.
+**~~An internal abstraction~~** — done. `VideoSink`, `AudioSink`, `InputSource` and
+`Clock` are abstract classes in `src/frontend/Backend.h`, the run loop lives in
+`App.cpp` and contains no SDL, and the SDL code is one implementation of each.
+
+The fourth interface was not in the original plan, and the reason it exists is worth
+recording: pacing needs a clock, and a `waitForNextFrame()` on the backend would have
+hidden the deadline arithmetic — the part that actually keeps the emulator from
+drifting — inside the untestable half. Splitting it into `now()` and `sleep()` puts
+that arithmetic in the loop where it can be read and tested, and leaves the backend
+only the genuinely host-specific job of sleeping accurately.
+
+Writing the tests found a bug in the first attempt, which is the return on the whole
+exercise arriving early: the loop sleeps the bulk of a wait and then spins on `now()`
+for the last millisecond. Against a fake clock that only moves when asked, that spin
+never terminates. The spin belongs in the backend, and the interface now says so.
 
 **A plugin ABI with dynamically loaded libraries** is a much larger commitment: a
 stable C boundary, versioning, discovery, lifetime and ownership across the boundary,
@@ -66,30 +76,120 @@ UI, save states, rewind, netplay and shaders. A libretro core is a few hundred l
 top of what already exists here, and it would deliver the entire benefit of a plugin
 ecosystem without this project having to define, document and defend an ABI.
 
-So the recommendation is: build the interfaces, skip the ABI, and consider a libretro
-core if reach is the goal.
+So the recommendation was: build the interfaces, skip the ABI, and consider a libretro
+core if reach is the goal. **The decision taken was to build the ABI anyway**, as the
+learning exercise this project has been from the start — with the internal interfaces
+underneath, so it stays reversible.
 
-That said — if the point is to *learn how a plugin architecture works*, that is a
-perfectly good reason and this whole project began as a learning exercise. In that case
-build it deliberately as the exercise it is, and keep the internal interfaces underneath
-so the decision stays reversible.
+### The ABI, in four stages
+
+Two things found while writing the SDL backends shaped the design, and both are worth
+knowing before reading the header:
+
+- **Video and input cannot be independent modules.** `SDL_PollEvent` drains one queue
+  carrying window, keyboard and pad events alike, so two separately loaded libraries
+  would have to agree about who owns it. The host therefore owns the window and the
+  event pump and forwards what it drains — which is also what kills the "which video
+  plugin works with which input plugin" combinatorics that made the N64 plugin scene
+  miserable.
+- **The Zapper needs video data inside an input plugin.** Light sensing samples screen
+  brightness where the gun is pointed. Routing that through host services
+  (`nes_host::get_frame`) rather than plugin-to-plugin keeps the dependency graph a star
+  and means a controller plugin never has to know which video plugin is loaded. This is
+  the reason to settle the ABI *before* the Zapper rather than after.
+
+1. ~~**The C boundary, with the backends still compiled in.**~~ Done.
+   `src/plugin/nes_plugin.h` is the ABI; `PluginHost` is the registry, the version
+   handshake and the adapters that present a C api as the C++ interface `App` already
+   speaks. The SDL backends reach the run loop through it on every run, so the boundary
+   cannot rot unnoticed — a mistake in its shape is a compile error today rather than a
+   crash in a stranger's library later.
+2. ~~**Real shared libraries**, audio first.~~ Done for audio. `plugins/audio_sdl.dll`
+   is loaded from a folder beside the executable, and a module found there shadows the
+   built-in of the same id -- which is the point of being able to drop one in. Nothing
+   in the api structs changed, exactly as predicted; what got added is `Module`
+   (LoadLibrary/dlopen behind RAII), directory scanning, and the typed creation below.
+
+   Two things worth recording. **An instance keeps its library mapped**: every function
+   it calls lives in the library's address space, so `Module::create<T>()` hands the new
+   object a `shared_ptr` to its own module rather than trusting a vector somewhere to
+   stay in scope. Getting that wrong crashes at shutdown, on someone else's machine, in
+   a stack trace naming nothing, so the types enforce it instead of a comment.
+   **The kind check cannot be a cast**: the api is a C struct with no RTTI, and a
+   `static_cast` from `void*` would reinterpret an audio api as a video one and crash on
+   the third call. `PluginTraits<T>` says what is expected at compile time and the
+   descriptor is checked at run time.
+
+   Video and input remain built in. They are harder for a real reason -- the host owns
+   the window and the event pump -- and are worth doing after the dialogs, when there is
+   something to configure.
+3. **Dialogs.** The host's chooser is ~~done~~: `F1` while playing, or `--settings` with
+   no ROM at all, lists what is installed for each job, says whether each came from a
+   file or is built in, and writes the choice to `nes.cfg`. It applies on the next
+   launch — swapping a video or input plugin under a running emulator would mean tearing
+   down the window and the event queue the dialog is itself running on.
+
+   What it decides lives in `PluginSettings` and is tested with no window: that a choice
+   persists, that Cancel does not apply, that a config naming a deleted plugin shows the
+   fallback rather than a name nothing matches. Only the presentation is per-platform,
+   and only Win32 exists so far; elsewhere it says so instead of opening nothing.
+
+   The controller plugin now has its own dialog, reached from that chooser: pick a
+   group, pick a button, press Bind, then press the key or gamepad button you want.
+   Anything else in the same group that already had it is released, because one key
+   driving two NES buttons is never what someone meant and finding out while playing is
+   worse than watching the old binding go.
+
+   The key mapping is the part worth knowing about. Printable keys are resolved through
+   the keyboard layout and SDL's own keycode table, so a French or German keyboard binds
+   the key that was pressed rather than the one in that position on a US board; only the
+   keys producing no character need a table. A key SDL cannot name is refused out loud
+   rather than guessed at.
+
+   Still to come: `configure()` for video and audio. Both are still built in, and their
+   Settings buttons in the chooser are correctly disabled.
+4. ~~**The Zapper**, as a second controller plugin. The proof the architecture holds.~~
+   Done, and the architecture held: what the ABI grew is two functions on the end of
+   two existing structs — `poll_zapper` on the input api, `window_to_frame` on the
+   video one — plus a `nes_zapper_state` carrying its own size, set by the host, so a
+   newer plugin cannot write past an older host's buffer. Neither plugin can do this
+   alone. The input plugin knows where the mouse is in *window* pixels; the video
+   plugin is the only thing that knows how the picture sits inside the window. The host
+   joins them, which is what keeps the graph a star.
+
+   Two things were wrong in the references and had to be settled against the game.
+   **Bit 4 is active low too.** With the bit set while the trigger is held, Duck Hunt
+   consumes a bullet and never starts its shot sequence at all; with it clear, the
+   screen blanks four frames later exactly as it should. Both bits being active low is
+   the more sensible piece of hardware anyway — a closed switch and a conducting
+   phototransistor each pull their line down. **The brightness threshold matters more
+   than it looks.** Duck Hunt's foliage green has a luma of 172, so a threshold of 160
+   made scenery count as light, and the game's own "screen blanked, so I should see
+   nothing" check then discarded *every* shot. It is 200 now; the strobe is pure white.
+
+   Verified end to end against the multicart: `--shoot=237,124@980:12` scores
+   `001000` and marks the duck hit, `--shoot=120,40@980:12` scores nothing and the duck
+   flies on. The aim point came from instrumenting the emulator to report the brightest
+   thing on screen each frame, which found the strobe as a 32x32 white box at
+   (222-253, 109-140) — 190 pixels from where reading a screenshot had suggested.
 
 ## Input, properly
 
-1. **Backend interface**, as above. Everything below plugs into it.
+1. ~~**Backend interface**~~ — done. Everything below plugs into it.
 2. ~~**Gamepad support** via SDL's game-controller API.~~ Done.
 3. ~~**Remapping**~~ — done, as a binding table per port in `nes.cfg`.
-4. **A configuration dialog.** Editing a file works, but binding a key by pressing it is
-   what people expect. SDL alone has no widgets, so this needs either Dear ImGui (small,
-   self-contained, no external toolkit) or a native dialog per platform. ImGui is the
-   pragmatic choice and would also give a debugger UI later. `Config` already round-trips
-   through disk, so a dialog would only need to edit the struct and save it.
-5. **The Zapper.** A well-scoped and genuinely fun addition: sample the framebuffer at
-   the mouse position for brightness, and report it on `$4017` bit 3 (inverted — the
-   bit is *clear* when light is seen) with the trigger on bit 4. Duck Hunt is an NROM
-   cartridge, so nothing else has to change. The subtlety is that games strobe the
-   screen white for a frame to test each target in turn, so the light sense has to
-   reflect what is on screen *now* rather than an average.
+4. ~~**A configuration dialog.**~~ Done, as a native dialog rather than Dear ImGui. The
+   choice went that way because the dialog has to be reachable while the emulator is
+   running and must not fight SDL for the event queue: a modal native window runs its
+   own loop and hands control back when it closes. `Config` already round-tripped
+   through disk, so the dialog only edits the struct and saves it. Only Win32 exists so
+   far; elsewhere it says so rather than opening nothing.
+5. ~~**The Zapper.**~~ Done — see the plugin section above for what it cost and what
+   the hardware references got wrong. The subtlety anticipated here was the real one:
+   a game strobes the screen white for a frame to test each target in turn, so the
+   light sense reads the framebuffer as it stands rather than an average, and the aim
+   point is applied before the frame runs so it is already in place when the game reads
+   the gun partway down the picture it is drawing.
 
 ## Accuracy, when it starts to matter
 
@@ -101,13 +201,42 @@ Roughly in order of how likely a real game is to notice:
   interrupt currently powers up inhibited, which is a deviation adopted because a real
   game needs it, and only a test ROM can say what the hardware truly does.
 - ~~**Bus conflicts** on UxROM and CNROM~~ — done, driven by the NES 2.0 submapper
-  rather than guessed from the mapper number. **MMC1's consecutive-write rule** remains:
-  hardware ignores the second write of a read-modify-write pair because it lands on the
-  very next cycle, and this does not.
-- **The `$2002` read race** — reading exactly as vblank is raised should suppress the
-  NMI.
-- **Mid-scanline rendering.** Currently each line is drawn from the scroll state at its
-  start, which handles per-line raster effects but not mid-line changes.
+  rather than guessed from the mapper number.
+- ~~**MMC1's consecutive-write rule.**~~ Done, and it needed fixing in the CPU first: a
+  read-modify-write instruction writes the unmodified byte back before the result, one
+  cycle apart, and the core was only ever emitting the second. Now it emits both, and
+  MMC1 keeps the first and drops the second — so `DEC $8000` shifts in a bit of what was
+  already at that address, which is what the games expecting it were written against.
+- ~~**Advance the PPU inside the bus access.**~~ Done. `Nes::step()` used to run a whole
+  instruction and only then tick the PPU, dating every device access to the instruction
+  boundary before it — up to 21 dots early, measured on Super Mario Bros' own vblank
+  loop, which reads `$2002` every seven CPU cycles. `NesBus` now advances the PPU and
+  APU one cycle before serving each access, and settles the difference when the
+  instruction ends. A register is read at the cycle its access happens, to the dot.
+  Bus accesses are not quite cycles — a taken branch, a page-crossing read and the
+  internal cycles of a stack operation each cost one without touching the bus — so the
+  distribution is still an approximation, just a far finer one. All nine test ROMs
+  render byte-identical frames, which says the totals did not move.
+- ~~**The `$2002` read race.**~~ Done. Three dots at the top of vblank decide it, and the
+  CPU loses all three: reading one dot early cancels the flag before it comes up,
+  reading on the dot returns it clear, and reading one dot late returns it set but still
+  loses the interrupt, because /NMI went down and came back up inside a single dot. What
+  varies across the three is only what the flag reads back as; the interrupt is gone
+  either way. Measured across the ROMs here it fires about once every three thousand
+  frames, and `Ppu::vblankRaces()` counts it so the number is never a guess. Still worth
+  checking against blargg's `ppu_vbl_nmi`, which tests exactly this.
+- ~~**Mid-scanline rendering.**~~ Done. A line is still drawn from the state at its
+  start, and is now redrawn from partway across whenever a write changes something the
+  rest of it depends on: `$2001`, the background pattern-table bit of `$2000`, fine X,
+  or `v` itself. A line nothing is written during is untouched, which is why every ROM
+  renders identically.
+
+  Worth recording what the measurement found, because it decides how much this is worth:
+  of the ten ROMs here, **only Super Mario Bros writes mid-line at all** — the fine X of
+  its sprite-zero split, 355 times in a thousand frames of play. Not one of those
+  redraws changed a single pixel, because the split lands on a uniform band of sky where
+  a few pixels of horizontal shift look exactly the same. The behaviour is real and now
+  correct; nothing available demonstrates it, so it is pinned by unit tests instead.
 - **A decimal-mode switch in emu6502**: the 2A03 ignores the `D` flag in `ADC`/`SBC`
   and the core implements full BCD. No commercial game depends on this, which is why it
   is this far down.
