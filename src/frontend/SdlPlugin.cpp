@@ -212,6 +212,10 @@ void inputPoll(void* self, nes_input_state* out) {
 	out->turbo = state.turbo ? 1 : 0;
 }
 
+void inputConfigure(void* self) {
+	static_cast<nesfe::SdlInput*>(self)->configure();
+}
+
 const nes_input_api INPUT_API = {
 	sizeof(nes_input_api),
 	inputCreate,
@@ -219,7 +223,7 @@ const nes_input_api INPUT_API = {
 	inputOpen,
 	inputClose,
 	inputPoll,
-	nullptr
+	inputConfigure
 };
 
 const nes_plugin_info INPUT_INFO = {

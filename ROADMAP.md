@@ -134,9 +134,20 @@ knowing before reading the header:
    fallback rather than a name nothing matches. Only the presentation is per-platform,
    and only Win32 exists so far; elsewhere it says so instead of opening nothing.
 
-   Still to come: each plugin's own `configure()`. The Settings buttons are there and
-   correctly disabled, because no plugin implements one yet. This is the part that
-   multiplies the work — one toolkit per plugin, in one process.
+   The controller plugin now has its own dialog, reached from that chooser: pick a
+   group, pick a button, press Bind, then press the key or gamepad button you want.
+   Anything else in the same group that already had it is released, because one key
+   driving two NES buttons is never what someone meant and finding out while playing is
+   worse than watching the old binding go.
+
+   The key mapping is the part worth knowing about. Printable keys are resolved through
+   the keyboard layout and SDL's own keycode table, so a French or German keyboard binds
+   the key that was pressed rather than the one in that position on a US board; only the
+   keys producing no character need a table. A key SDL cannot name is refused out loud
+   rather than guessed at.
+
+   Still to come: `configure()` for video and audio. Both are still built in, and their
+   Settings buttons in the chooser are correctly disabled.
 4. **The Zapper**, as a second controller plugin. The proof the architecture holds.
 
 ## Input, properly

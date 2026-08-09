@@ -1,5 +1,7 @@
 #include "SdlBackend.h"
 
+#include "BindingsDialog.h"
+
 #include <SDL_syswm.h>
 
 #include "nes/Controller.h"
@@ -291,6 +293,34 @@ int SdlInput::portOf(SDL_JoystickID id) const {
 		if (m_pads[port] && instanceId(m_pads[port]) == id)
 			return port;
 	return -1;
+}
+
+void SdlInput::configure() {
+	if (!bindingsDialogAvailable()) {
+		SDL_Log("no bindings dialog on this platform yet -- edit %s",
+				nesgui::Config::path().c_str());
+		return;
+	}
+
+	// A fresh copy: whatever else has been changed in the file since this
+	// program started is not this dialog's to undo, and saving a stale copy
+	// would do exactly that.
+	nesgui::Config onDisk = nesgui::Config::defaults();
+	const std::string path = nesgui::Config::path();
+	onDisk.load(path);
+
+	if (!showBindingsDialog(&onDisk, nullptr))
+		return;
+
+	if (onDisk.save(path))
+		SDL_Log("saved controller bindings to %s", path.c_str());
+	else
+		SDL_Log("could not write %s", path.c_str());
+
+	// If this instance owns its bindings, take the new ones now so a live
+	// emulator responds without being restarted.
+	if (m_loadOwn)
+		m_owned = onDisk;
 }
 
 int SdlInput::padCount() const {

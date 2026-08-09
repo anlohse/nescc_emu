@@ -38,6 +38,7 @@ that keeps the status bar fixed while the level moves beneath it all work.
 | Plugin ABI | C boundary with a version handshake; the SDL backends already go through it |
 | Loadable plugins | `plugins/audio_sdl` is a real shared library; a module shadows the built-in of the same id |
 | Plugin chooser | `F1`, or `--settings` with no ROM: pick a plugin per job, saved to `nes.cfg` |
+| Rebinding | the controller plugin's own dialog: press Bind, then press the key or pad button |
 | Window | `nes_gui`: SDL2 video and audio, keyboard, paced to NTSC's 60.0988 Hz |
 | Headless runner | `nes_run`: tracing, scripted input, PPM screenshots, WAV capture |
 
@@ -171,6 +172,12 @@ Names are SDL's own — `Right Shift`, `Keypad 8`, `dpup`, `leftshoulder` — be
 converts both directions, so the names it writes are exactly the names it reads back.
 A binding it does not recognise is reported and skipped rather than rejecting the file:
 one typo costs that binding, not the rest of your setup.
+
+Or press `F1` and open the controller plugin's own dialog, where a binding is set by
+pressing the key or gamepad button you want it on. Anything else in the same group that
+already had it is released. Printable keys go through your keyboard layout, so a
+non-US board binds the key you actually pressed rather than the one in that place on a
+US one.
 
 Command-line options win over the file. Delete it to get the defaults back.
 

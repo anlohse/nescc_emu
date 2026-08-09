@@ -85,6 +85,16 @@ public:
 	void close() override;
 	void poll(InputState* out) override;
 
+	/**
+	 * This plugin's own settings: the bindings dialog.
+	 *
+	 * Reads the configuration from disk and writes it back rather than editing
+	 * whatever this instance happens to hold, because the instance that shows
+	 * the dialog is usually a throwaway made for the purpose -- and because the
+	 * bindings on disk are what the next launch will use either way.
+	 */
+	void configure();
+
 	/** How many pads are currently claimed by the two ports. */
 	int padCount() const;
 
