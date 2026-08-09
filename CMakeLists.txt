@@ -92,7 +92,14 @@ if(NES_BUILD_GUI)
         FetchContent_MakeAvailable(SDL2)
     endif()
 
-    add_executable(nes_gui WIN32 src/gui_main.cpp src/GuiConfig.cpp)
+    add_executable(nes_gui WIN32
+        src/gui_main.cpp
+        src/GuiConfig.cpp
+        src/frontend/App.cpp
+        src/frontend/SdlBackend.cpp
+        src/frontend/SdlPlugin.cpp
+        src/plugin/PluginHost.cpp
+    )
     target_link_libraries(nes_gui PRIVATE nes_lib SDL2::SDL2)
 
     # SDL renames main() to SDL_main and supplies the real entry point. On
@@ -164,8 +171,17 @@ endif()
 # building with -DNES_BUILD_GUI=OFF. Must come after both option() blocks above,
 # or NES_BUILD_TESTS is simply undefined here and the target silently vanishes.
 if(NES_BUILD_GUI AND NES_BUILD_TESTS)
-    add_executable(nes_gui_test test_src/testGuiConfig.cpp src/GuiConfig.cpp)
-    target_link_libraries(nes_gui_test PRIVATE SDL2::SDL2 doctest::doctest)
+    # App.cpp is here but SdlBackend.cpp is not: the run loop is tested against
+    # doubles, which is the whole point of the backend interfaces.
+    add_executable(nes_gui_test
+        test_src/testGuiConfig.cpp
+        test_src/testApp.cpp
+        test_src/testPlugin.cpp
+        src/GuiConfig.cpp
+        src/frontend/App.cpp
+        src/plugin/PluginHost.cpp
+    )
+    target_link_libraries(nes_gui_test PRIVATE nes_lib SDL2::SDL2 doctest::doctest)
     if(TARGET SDL2::SDL2main)
         target_link_libraries(nes_gui_test PRIVATE SDL2::SDL2main)
     endif()

@@ -46,11 +46,21 @@ feature:
 The proposal was to make video, audio and input into plugins. That is really two
 separate ideas, with very different costs.
 
-**An internal abstraction** — `VideoSink`, `AudioSink`, `InputSource` as abstract
-classes, with the current SDL code as one implementation of each — is straightforwardly
-worth doing. It costs about a day, makes the Zapper and gamepad work land cleanly,
-makes the front-end testable without a window, and lets a headless recorder and an SDL
-window be the same program with a different backend selected.
+**~~An internal abstraction~~** — done. `VideoSink`, `AudioSink`, `InputSource` and
+`Clock` are abstract classes in `src/frontend/Backend.h`, the run loop lives in
+`App.cpp` and contains no SDL, and the SDL code is one implementation of each.
+
+The fourth interface was not in the original plan, and the reason it exists is worth
+recording: pacing needs a clock, and a `waitForNextFrame()` on the backend would have
+hidden the deadline arithmetic — the part that actually keeps the emulator from
+drifting — inside the untestable half. Splitting it into `now()` and `sleep()` puts
+that arithmetic in the loop where it can be read and tested, and leaves the backend
+only the genuinely host-specific job of sleeping accurately.
+
+Writing the tests found a bug in the first attempt, which is the return on the whole
+exercise arriving early: the loop sleeps the bulk of a wait and then spins on `now()`
+for the last millisecond. Against a fake clock that only moves when asked, that spin
+never terminates. The spin belongs in the backend, and the interface now says so.
 
 **A plugin ABI with dynamically loaded libraries** is a much larger commitment: a
 stable C boundary, versioning, discovery, lifetime and ownership across the boundary,
@@ -66,17 +76,45 @@ UI, save states, rewind, netplay and shaders. A libretro core is a few hundred l
 top of what already exists here, and it would deliver the entire benefit of a plugin
 ecosystem without this project having to define, document and defend an ABI.
 
-So the recommendation is: build the interfaces, skip the ABI, and consider a libretro
-core if reach is the goal.
+So the recommendation was: build the interfaces, skip the ABI, and consider a libretro
+core if reach is the goal. **The decision taken was to build the ABI anyway**, as the
+learning exercise this project has been from the start — with the internal interfaces
+underneath, so it stays reversible.
 
-That said — if the point is to *learn how a plugin architecture works*, that is a
-perfectly good reason and this whole project began as a learning exercise. In that case
-build it deliberately as the exercise it is, and keep the internal interfaces underneath
-so the decision stays reversible.
+### The ABI, in four stages
+
+Two things found while writing the SDL backends shaped the design, and both are worth
+knowing before reading the header:
+
+- **Video and input cannot be independent modules.** `SDL_PollEvent` drains one queue
+  carrying window, keyboard and pad events alike, so two separately loaded libraries
+  would have to agree about who owns it. The host therefore owns the window and the
+  event pump and forwards what it drains — which is also what kills the "which video
+  plugin works with which input plugin" combinatorics that made the N64 plugin scene
+  miserable.
+- **The Zapper needs video data inside an input plugin.** Light sensing samples screen
+  brightness where the gun is pointed. Routing that through host services
+  (`nes_host::get_frame`) rather than plugin-to-plugin keeps the dependency graph a star
+  and means a controller plugin never has to know which video plugin is loaded. This is
+  the reason to settle the ABI *before* the Zapper rather than after.
+
+1. ~~**The C boundary, with the backends still compiled in.**~~ Done.
+   `src/plugin/nes_plugin.h` is the ABI; `PluginHost` is the registry, the version
+   handshake and the adapters that present a C api as the C++ interface `App` already
+   speaks. The SDL backends reach the run loop through it on every run, so the boundary
+   cannot rot unnoticed — a mistake in its shape is a compile error today rather than a
+   crash in a stranger's library later.
+2. **Real shared libraries**, one kind at a time, audio first: it has the narrowest
+   interface and no window coupling. Nothing in the api structs changes; what gets added
+   is `dlopen`/`LoadLibrary`, symbol lookup, and a search path.
+3. **Dialogs.** Each plugin's own `configure()`, plus a host dialog for choosing between
+   them. This is the part that multiplies the work — a settings dialog needs a toolkit,
+   and one per plugin means several in one process.
+4. **The Zapper**, as a second controller plugin. The proof the architecture holds.
 
 ## Input, properly
 
-1. **Backend interface**, as above. Everything below plugs into it.
+1. ~~**Backend interface**~~ — done. Everything below plugs into it.
 2. ~~**Gamepad support** via SDL's game-controller API.~~ Done.
 3. ~~**Remapping**~~ — done, as a binding table per port in `nes.cfg`.
 4. **A configuration dialog.** Editing a file works, but binding a key by pressing it is
@@ -107,10 +145,36 @@ Roughly in order of how likely a real game is to notice:
   cycle apart, and the core was only ever emitting the second. Now it emits both, and
   MMC1 keeps the first and drops the second — so `DEC $8000` shifts in a bit of what was
   already at that address, which is what the games expecting it were written against.
-- **The `$2002` read race** — reading exactly as vblank is raised should suppress the
-  NMI.
-- **Mid-scanline rendering.** Currently each line is drawn from the scroll state at its
-  start, which handles per-line raster effects but not mid-line changes.
+- ~~**Advance the PPU inside the bus access.**~~ Done. `Nes::step()` used to run a whole
+  instruction and only then tick the PPU, dating every device access to the instruction
+  boundary before it — up to 21 dots early, measured on Super Mario Bros' own vblank
+  loop, which reads `$2002` every seven CPU cycles. `NesBus` now advances the PPU and
+  APU one cycle before serving each access, and settles the difference when the
+  instruction ends. A register is read at the cycle its access happens, to the dot.
+  Bus accesses are not quite cycles — a taken branch, a page-crossing read and the
+  internal cycles of a stack operation each cost one without touching the bus — so the
+  distribution is still an approximation, just a far finer one. All nine test ROMs
+  render byte-identical frames, which says the totals did not move.
+- ~~**The `$2002` read race.**~~ Done. Three dots at the top of vblank decide it, and the
+  CPU loses all three: reading one dot early cancels the flag before it comes up,
+  reading on the dot returns it clear, and reading one dot late returns it set but still
+  loses the interrupt, because /NMI went down and came back up inside a single dot. What
+  varies across the three is only what the flag reads back as; the interrupt is gone
+  either way. Measured across the ROMs here it fires about once every three thousand
+  frames, and `Ppu::vblankRaces()` counts it so the number is never a guess. Still worth
+  checking against blargg's `ppu_vbl_nmi`, which tests exactly this.
+- ~~**Mid-scanline rendering.**~~ Done. A line is still drawn from the state at its
+  start, and is now redrawn from partway across whenever a write changes something the
+  rest of it depends on: `$2001`, the background pattern-table bit of `$2000`, fine X,
+  or `v` itself. A line nothing is written during is untouched, which is why every ROM
+  renders identically.
+
+  Worth recording what the measurement found, because it decides how much this is worth:
+  of the ten ROMs here, **only Super Mario Bros writes mid-line at all** — the fine X of
+  its sprite-zero split, 355 times in a thousand frames of play. Not one of those
+  redraws changed a single pixel, because the split lands on a uniform band of sky where
+  a few pixels of horizontal shift look exactly the same. The behaviour is real and now
+  correct; nothing available demonstrates it, so it is pinned by unit tests instead.
 - **A decimal-mode switch in emu6502**: the 2A03 ignores the `D` flag in `ADC`/`SBC`
   and the core implements full BCD. No commercial game depends on this, which is why it
   is this far down.

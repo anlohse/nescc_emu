@@ -18,12 +18,14 @@ that keeps the status bar fixed while the level moves beneath it all work.
 | Bus conflicts | on the discrete boards, when the NES 2.0 submapper declares them |
 | MMC1 serial port | five-bit shift register, with the consecutive-write rule applied |
 | CPU bus | RAM + mirroring, PPU/cartridge routing, `peek()` for debuggers |
+| Device timing | the PPU and APU advance per bus access, so a register is read at the cycle it is read at |
 | CPU | emu6502, which passes Klaus Dormann's functional test |
-| PPU timing | dot/scanline/frame counters, vblank, NMI, odd-frame dot skip |
+| PPU timing | dot/scanline/frame counters, vblank, NMI, odd-frame dot skip, the `$2002` race |
 | PPU registers | full register file: write toggle, buffered `$2007`, auto-increment |
 | PPU memory | VRAM with nametable mirroring, palette mirroring, CHR via the mapper |
 | Mirroring | horizontal, vertical, four-screen, both single-screen modes; switchable at runtime |
 | Background rendering | tiles, attributes, fine and coarse scroll across nametables |
+| Mid-line changes | scroll, mask and pattern-table writes redraw the rest of the line |
 | Sprite rendering | 8x8 and 8x16, flipping, priority, 8-per-line limit, overflow |
 | Sprite-zero hit | reported at the dot of overlap, so mid-frame splits work |
 | OAM DMA (`$4014`) | copies the page and stalls the CPU 513 cycles |
@@ -32,6 +34,8 @@ that keeps the status bar fixed while the level moves beneath it all work.
 | APU channels | two pulses with sweep, triangle, noise, DMC — all five |
 | APU frame counter | 4- and 5-step sequences, quarter/half clocks, frame IRQ |
 | APU mixing | the hardware's nonlinear curve, high-pass and anti-alias filtering |
+| Backends | video, audio, input and clock behind interfaces; SDL is one implementation |
+| Plugin ABI | C boundary with a version handshake; the SDL backends already go through it |
 | Window | `nes_gui`: SDL2 video and audio, keyboard, paced to NTSC's 60.0988 Hz |
 | Headless runner | `nes_run`: tracing, scripted input, PPM screenshots, WAV capture |
 
@@ -40,9 +44,35 @@ that keeps the status bar fixed while the level moves beneath it all work.
 ```
 include/nes/     public headers
 src/             Cartridge (iNES), Mapper (seven boards), Ppu, Apu, Controller,
-                 NesBus, Nes, main.cpp (headless runner), gui_main.cpp (SDL2 window)
+                 NesBus, Nes, main.cpp (headless runner)
+src/plugin/      nes_plugin.h -- the C plugin ABI: version, descriptor, api structs
+                 PluginHost   -- registry, version handshake, C-to-C++ adapters
+src/frontend/    Backend.h  -- video, audio, input and clock as abstract classes
+                 App.cpp    -- the run loop, written against those and nothing else
+                 SdlBackend -- one SDL implementation of each
+                 SdlPlugin  -- those, exported through the C ABI
+                 gui_main.cpp is now only wiring: parse, init, select, run
 test_src/        doctest suite, including the nestest harness
 ```
+
+The four interfaces in `frontend/Backend.h` are the seam between the emulator and
+the machine it runs on. Everything host-shaped -- a window, a sound device, a
+person pressing keys, a wall clock -- arrives through one of them, so the run
+loop contains no SDL and `nes_gui_test` drives the whole thing with doubles: no
+window, no device, and time that only moves when the test says so.
+
+Underneath them is a C plugin ABI in `src/plugin/nes_plugin.h`. Video, audio and
+input each reach the run loop through it, and the SDL implementations are already
+plugins in every sense except that they are still compiled in rather than loaded:
+the same version handshake, the same descriptor, the same struct of function
+pointers a shared library will export. Exercising the boundary on every run is what
+keeps it from rotting while nothing external uses it yet.
+
+The host owns the window and the event pump. That is not an accident of this
+implementation -- one platform event queue carries window, keyboard and pad events
+together, so two separately loaded modules cannot both own it.
+[ROADMAP.md](ROADMAP.md) has the four stages and the two design constraints that
+shaped them.
 
 ## Building
 
@@ -344,9 +374,11 @@ Nyquist folds back down as noise.
   the right CPU cycles, but the `$4017` write delay is approximated, and the DMC charges
   a flat 4 cycles per fetch where hardware varies with what the CPU was doing. Music and
   effects are right; a test ROM measuring the sequencer to the cycle would not be.
-- **Scanline-granular rendering.** Each line is drawn from the scroll state at its
-  start, so per-line raster effects work but mid-line scroll changes do not. That is
-  enough for most games and not enough for a few.
+- **Rendering is not a per-dot pipeline.** A line is drawn from the state at its start
+  and redrawn from partway across when a write changes the rest of it, which covers
+  mid-line scroll, mask and pattern-table changes. What it does not model is hardware's
+  two-tile fetch latency, so a change takes effect at the pixel the write lands on
+  rather than a tile or two later.
 - **Sprite overflow is set by the real 8-per-line rule**, not by hardware's buggy
   evaluation, which both over- and under-reports on real silicon.
 - **MMC3's counter is clocked once per scanline**, at dot 260, where the sprite fetches
