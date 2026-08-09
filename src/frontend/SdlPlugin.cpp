@@ -79,6 +79,10 @@ int videoSaveScreenshot(void* self, const char* path) {
 	return static_cast<nesfe::SdlVideo*>(self)->saveScreenshot(path) ? 1 : 0;
 }
 
+void* videoNativeWindow(void* self) {
+	return static_cast<nesfe::SdlVideo*>(self)->nativeWindow();
+}
+
 const nes_video_api VIDEO_API = {
 	sizeof(nes_video_api),
 	videoCreate,
@@ -88,7 +92,8 @@ const nes_video_api VIDEO_API = {
 	videoPresent,
 	videoSetTitle,
 	videoSaveScreenshot,
-	nullptr           // no settings dialog yet; the host checks before calling
+	nullptr,          // no settings dialog yet; the host checks before calling
+	videoNativeWindow
 };
 
 const nes_plugin_info VIDEO_INFO = {

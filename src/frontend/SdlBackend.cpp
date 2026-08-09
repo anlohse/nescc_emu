@@ -1,5 +1,7 @@
 #include "SdlBackend.h"
 
+#include <SDL_syswm.h>
+
 #include "nes/Controller.h"
 #include "nes/Ppu.h"
 
@@ -124,6 +126,22 @@ void SdlVideo::present(const std::uint8_t* indices, int width, int height) {
 	SDL_RenderClear(m_renderer);
 	SDL_RenderCopy(m_renderer, m_texture, nullptr, nullptr);
 	SDL_RenderPresent(m_renderer);
+}
+
+void* SdlVideo::nativeWindow() const {
+	if (!m_window)
+		return nullptr;
+	SDL_SysWMinfo info;
+	SDL_VERSION(&info.version);
+	if (!SDL_GetWindowWMInfo(m_window, &info))
+		return nullptr;
+#if defined(_WIN32)
+	return info.info.win.window;
+#else
+	// Deliberately nothing elsewhere: a handle is only useful to a dialog that
+	// knows what to do with it, and the only dialog so far is Win32's.
+	return nullptr;
+#endif
 }
 
 void SdlVideo::setTitle(const char* title) {
@@ -360,6 +378,7 @@ void SdlInput::poll(InputState* out) {
 			case SDL_SCANCODE_M:       out->commands |= COMMAND_MUTE; break;
 			case SDL_SCANCODE_R:       out->commands |= COMMAND_RESET; break;
 			case SDL_SCANCODE_F12:     out->commands |= COMMAND_SCREENSHOT; break;
+			case SDL_SCANCODE_F1:      out->commands |= COMMAND_SETTINGS; break;
 			default: break;
 			}
 		}

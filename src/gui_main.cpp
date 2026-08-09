@@ -10,7 +10,9 @@
 #include "GuiConfig.h"
 #include "frontend/App.h"
 #include "frontend/SdlBackend.h"
+#include "frontend/PluginSettings.h"
 #include "frontend/SdlPlugin.h"
+#include "frontend/SettingsDialog.h"
 #include "plugin/Module.h"
 #include "plugin/PluginHost.h"
 #include "nes/Nes.h"
@@ -64,6 +66,17 @@ bool startsWith(const char* s, const char* prefix, const char** rest) {
 	return true;
 }
 
+/**
+ * Fill @p registry with everything available: loaded modules first, then the
+ * built-ins, which lose any id a module already claimed.
+ *
+ * @p modules must outlive the registry -- the entries hold references to their
+ * libraries, but the caller owning the vector keeps the intent visible.
+ */
+void buildRegistry(nesplug::Registry* registry,
+		std::vector<std::shared_ptr<nesplug::Module> >* modules,
+		const std::string& directory);
+
 /** A `plugins` folder beside the executable, like nes.cfg is beside it. */
 std::string pluginDirectory() {
 	char* base = SDL_GetBasePath();
@@ -72,6 +85,37 @@ std::string pluginDirectory() {
 	std::string result = std::string(base) + "plugins";
 	SDL_free(base);
 	return result;
+}
+
+void buildRegistry(nesplug::Registry* registry,
+		std::vector<std::shared_ptr<nesplug::Module> >* modules,
+		const std::string& directory) {
+	std::string warning;
+
+	// Loadable modules first, so one dropped into the folder beats the copy
+	// compiled in. That is the point of being able to drop one in.
+	*modules = nesplug::loadModules(directory, &warning);
+	for (std::size_t i = 0; i < modules->size(); i++) {
+		registry->add(NES_PLUGIN_ABI_VERSION, (*modules)[i]->info(),
+				(*modules)[i]->api(), (*modules)[i]->path(), &warning, (*modules)[i]);
+		SDL_Log("loaded %s from %s", (*modules)[i]->info()->name,
+				(*modules)[i]->path().c_str());
+	}
+
+	// A built-in losing its id to a module is the expected outcome of
+	// installing one, so it goes to the log rather than to stderr with the
+	// real warnings.
+	std::string shadowed;
+	registry->add(nesfe::sdlPluginAbiVersion(), nesfe::sdlVideoInfo(),
+			nesfe::sdlVideoApi(), std::string(), &shadowed);
+	registry->add(nesfe::sdlPluginAbiVersion(), nesfe::sdlAudioInfo(),
+			nesfe::sdlAudioApi(), std::string(), &shadowed);
+	registry->add(nesfe::sdlPluginAbiVersion(), nesfe::sdlInputInfo(),
+			nesfe::sdlInputApi(), std::string(), &shadowed);
+	if (!shadowed.empty())
+		SDL_Log("%s", shadowed.c_str());
+	if (!warning.empty())
+		std::fprintf(stderr, "%s\n", warning.c_str());
 }
 
 } // namespace
@@ -91,6 +135,7 @@ int main(int argc, char* argv[]) {
 	int scale = config.scale;
 	bool fullscreen = config.fullscreen;
 	bool wantAudio = config.audio;
+	bool settingsOnly = false;
 
 	for (int i = 1; i < argc; i++) {
 		const char* rest = nullptr;
@@ -104,6 +149,8 @@ int main(int argc, char* argv[]) {
 			}
 		} else if (std::strcmp(argv[i], "--fullscreen") == 0) {
 			fullscreen = true;
+		} else if (std::strcmp(argv[i], "--settings") == 0) {
+			settingsOnly = true;
 		} else if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
 			usage(argv[0]);
 			return 0;
@@ -116,6 +163,37 @@ int main(int argc, char* argv[]) {
 			std::fprintf(stderr, "unexpected argument: %s\n", argv[i]);
 			return 2;
 		}
+	}
+
+	// Configuring the emulator should not require having a game to hand.
+	if (settingsOnly) {
+		if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+			std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
+			return 1;
+		}
+		if (!nesfe::settingsDialogAvailable()) {
+			std::fprintf(stderr,
+					"no settings dialog on this platform yet -- edit %s\n",
+					configPath.c_str());
+			SDL_Quit();
+			return 1;
+		}
+
+		nesplug::Registry registry;
+		std::vector<std::shared_ptr<nesplug::Module> > modules;
+		buildRegistry(&registry, &modules, pluginDirectory());
+
+		nesfe::PluginSettings settings(registry, config);
+		const bool accepted = nesfe::showSettingsDialog(&settings, nullptr);
+		if (accepted) {
+			settings.apply(&config);
+			if (config.save(configPath))
+				SDL_Log("saved plugin selection to %s", configPath.c_str());
+			else
+				std::fprintf(stderr, "could not write %s\n", configPath.c_str());
+		}
+		SDL_Quit();
+		return 0;
 	}
 
 	if (!romPath) {
@@ -146,37 +224,11 @@ int main(int argc, char* argv[]) {
 	}
 
 	// Everything the front end uses arrives through the plugin boundary, even
-	// though all three are compiled in today. Going through the same path the
-	// loader will use is what keeps that boundary honest: a mistake in its shape
-	// breaks the build now rather than a stranger's .dll later.
+	// the backends still compiled in. Going through the same path the loader
+	// uses is what keeps that boundary honest.
 	nesplug::Registry registry;
-	std::string warning;
-
-	// Loadable modules first, so one dropped into the folder beats the copy
-	// compiled in. That is the point of being able to drop one in.
-	const std::vector<std::shared_ptr<nesplug::Module> > modules =
-			nesplug::loadModules(pluginDirectory(), &warning);
-	for (std::size_t i = 0; i < modules.size(); i++) {
-		registry.add(NES_PLUGIN_ABI_VERSION, modules[i]->info(), modules[i]->api(),
-				modules[i]->path(), &warning, modules[i]);
-		SDL_Log("loaded %s from %s", modules[i]->info()->name,
-				modules[i]->path().c_str());
-	}
-
-	// Then the built-ins, which lose any id a module already claimed. That is
-	// the expected outcome of dropping a plugin in, not a problem, so it goes
-	// to the log rather than to stderr with the real warnings.
-	std::string shadowed;
-	registry.add(nesfe::sdlPluginAbiVersion(), nesfe::sdlVideoInfo(),
-			nesfe::sdlVideoApi(), std::string(), &shadowed);
-	registry.add(nesfe::sdlPluginAbiVersion(), nesfe::sdlAudioInfo(),
-			nesfe::sdlAudioApi(), std::string(), &shadowed);
-	registry.add(nesfe::sdlPluginAbiVersion(), nesfe::sdlInputInfo(),
-			nesfe::sdlInputApi(), std::string(), &shadowed);
-	if (!shadowed.empty())
-		SDL_Log("%s", shadowed.c_str());
-	if (!warning.empty())
-		std::fprintf(stderr, "%s\n", warning.c_str());
+	std::vector<std::shared_ptr<nesplug::Module> > modules;
+	buildRegistry(&registry, &modules, pluginDirectory());
 
 	const nesplug::Entry* videoEntry =
 			registry.select(NES_PLUGIN_VIDEO, config.videoPlugin);
@@ -246,6 +298,28 @@ int main(int argc, char* argv[]) {
 
 	nesfe::SdlClock clock;
 	nesfe::App app(console, video, audio, input, clock, appOptions);
+
+	// F1 opens the chooser. The selection is written to nes.cfg and takes
+	// effect on the next launch: swapping a video or input plugin under a
+	// running emulator would mean tearing down the window and the event queue
+	// the dialog is itself running on.
+	app.setSettingsHandler([&]() {
+		if (!nesfe::settingsDialogAvailable()) {
+			SDL_Log("no settings dialog on this platform yet -- edit %s",
+					configPath.c_str());
+			return;
+		}
+		nesfe::PluginSettings settings(registry, config);
+		if (!nesfe::showSettingsDialog(&settings, video.nativeWindow()))
+			return;
+		settings.apply(&config);
+		if (config.save(configPath))
+			SDL_Log("saved plugin selection to %s; it applies next launch",
+					configPath.c_str());
+		else
+			std::fprintf(stderr, "could not write %s\n", configPath.c_str());
+	});
+
 	app.run();
 
 	// Before tearing anything down: closing the window must not cost a save.

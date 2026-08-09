@@ -98,6 +98,9 @@ if(NES_BUILD_GUI)
         src/frontend/App.cpp
         src/frontend/SdlBackend.cpp
         src/frontend/SdlPlugin.cpp
+        src/frontend/PluginSettings.cpp
+        src/frontend/SettingsDialogWin32.cpp
+        src/frontend/SettingsDialogStub.cpp
         src/plugin/PluginHost.cpp
         src/plugin/Module.cpp
     )
@@ -202,8 +205,10 @@ if(NES_BUILD_GUI AND NES_BUILD_TESTS)
         test_src/testGuiConfig.cpp
         test_src/testApp.cpp
         test_src/testPlugin.cpp
+        test_src/testPluginSettings.cpp
         src/GuiConfig.cpp
         src/frontend/App.cpp
+        src/frontend/PluginSettings.cpp
         src/plugin/PluginHost.cpp
         src/plugin/Module.cpp
     )

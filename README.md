@@ -37,6 +37,7 @@ that keeps the status bar fixed while the level moves beneath it all work.
 | Backends | video, audio, input and clock behind interfaces; SDL is one implementation |
 | Plugin ABI | C boundary with a version handshake; the SDL backends already go through it |
 | Loadable plugins | `plugins/audio_sdl` is a real shared library; a module shadows the built-in of the same id |
+| Plugin chooser | `F1`, or `--settings` with no ROM: pick a plugin per job, saved to `nes.cfg` |
 | Window | `nes_gui`: SDL2 video and audio, keyboard, paced to NTSC's 60.0988 Hz |
 | Headless runner | `nes_run`: tracing, scripted input, PPM screenshots, WAV capture |
 
@@ -174,7 +175,8 @@ one typo costs that binding, not the rest of your setup.
 Command-line options win over the file. Delete it to get the defaults back.
 
 `P` or `Space` pauses, `N` advances one frame while paused, `M` mutes, holding `Tab`
-runs unthrottled, `R` resets, `F12` saves a screenshot, `Esc` quits. `--scale=N` sets
+runs unthrottled, `R` resets, `F1` opens the plugin chooser, `F12` saves a screenshot,
+`Esc` quits. `--scale=N` sets
 the window size, `--fullscreen` starts borderless, `--no-audio` runs silent; the picture
 letterboxes to the NES's aspect at any window size, with nearest-neighbour scaling.
 

@@ -86,6 +86,17 @@ void App::applyCommands(const InputState& state) {
 		if (m_audio.isOpen())
 			m_console.apu().setSampleOutput(true);
 	}
+	if ((state.commands & COMMAND_SETTINGS) && m_settingsHandler) {
+		// Whatever the dialog does, it takes wall-clock time this loop has no
+		// way to account for. Drop the deadline so the next frame starts a new
+		// one rather than being measured against a moment long past, and clear
+		// the queue so the device is not left playing a second of stale audio
+		// underneath a modal window.
+		m_audio.clear();
+		m_resampler.reset();
+		m_settingsHandler();
+		m_deadlineValid = false;
+	}
 	if (state.commands & COMMAND_SCREENSHOT) {
 		char name[64];
 		std::snprintf(name, sizeof(name), "nes-shot-%04d.bmp", m_shotIndex);

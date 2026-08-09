@@ -5,6 +5,7 @@
 
 #include "nes/Nes.h"
 
+#include <functional>
 #include <vector>
 
 namespace nesfe {
@@ -69,6 +70,22 @@ public:
 			InputSource& input, Clock& clock, const Options& options = Options());
 
 	/**
+	 * What to run when the player asks for the settings dialog.
+	 *
+	 * A callback rather than anything concrete, because the loop must stay free
+	 * of toolkits: a dialog is the single most platform-bound thing in the
+	 * program, and knowing about one here would undo the reason this class can
+	 * be tested at all. Unset means the command is ignored.
+	 *
+	 * The emulator pauses around the call. A dialog is modal and may sit open
+	 * for a minute; coming back to a deadline that far in the past would look
+	 * like a stall and be chased through the pacer's catch-up logic.
+	 */
+	void setSettingsHandler(std::function<void()> handler) {
+		m_settingsHandler = handler;
+	}
+
+	/**
 	 * Run one frame: poll input, act on it, step the console, present, pace.
 	 * @return false once the player has asked to quit.
 	 */
@@ -110,6 +127,8 @@ private:
 	bool m_muted;
 	bool m_wasTurbo;
 	int m_shotIndex;
+
+	std::function<void()> m_settingsHandler;
 
 	unsigned long m_frames;
 	unsigned long m_rebases;

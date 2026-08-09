@@ -35,6 +35,9 @@ public:
 	void setTitle(const char* title) override;
 	bool saveScreenshot(const char* path) override;
 
+	/** The native handle -- HWND, X11 Window -- for a dialog to sit over. */
+	void* nativeWindow() const;
+
 private:
 	SDL_Window* m_window;
 	SDL_Renderer* m_renderer;

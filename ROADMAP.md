@@ -123,9 +123,20 @@ knowing before reading the header:
    Video and input remain built in. They are harder for a real reason -- the host owns
    the window and the event pump -- and are worth doing after the dialogs, when there is
    something to configure.
-3. **Dialogs.** Each plugin's own `configure()`, plus a host dialog for choosing between
-   them. This is the part that multiplies the work — a settings dialog needs a toolkit,
-   and one per plugin means several in one process.
+3. **Dialogs.** The host's chooser is ~~done~~: `F1` while playing, or `--settings` with
+   no ROM at all, lists what is installed for each job, says whether each came from a
+   file or is built in, and writes the choice to `nes.cfg`. It applies on the next
+   launch — swapping a video or input plugin under a running emulator would mean tearing
+   down the window and the event queue the dialog is itself running on.
+
+   What it decides lives in `PluginSettings` and is tested with no window: that a choice
+   persists, that Cancel does not apply, that a config naming a deleted plugin shows the
+   fallback rather than a name nothing matches. Only the presentation is per-platform,
+   and only Win32 exists so far; elsewhere it says so instead of opening nothing.
+
+   Still to come: each plugin's own `configure()`. The Settings buttons are there and
+   correctly disabled, because no plugin implements one yet. This is the part that
+   multiplies the work — one toolkit per plugin, in one process.
 4. **The Zapper**, as a second controller plugin. The proof the architecture holds.
 
 ## Input, properly

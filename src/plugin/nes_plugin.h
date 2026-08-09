@@ -55,7 +55,16 @@ enum {
 	NES_COMMAND_STEP_FRAME = 1 << 2,
 	NES_COMMAND_MUTE       = 1 << 3,   /* toggle */
 	NES_COMMAND_RESET      = 1 << 4,
-	NES_COMMAND_SCREENSHOT = 1 << 5
+	NES_COMMAND_SCREENSHOT = 1 << 5,
+	/*
+	 * Open the host's settings dialog.
+	 *
+	 * Added after version 1 was defined, which costs nothing: commands is a
+	 * bitmask, so a plugin built against the older header simply never sets
+	 * this bit and a host that predates it ignores one it does not know. That
+	 * is the difference between growing an ABI and breaking one.
+	 */
+	NES_COMMAND_SETTINGS   = 1 << 6
 };
 
 /* ------------------------------------------------------------------------- */
@@ -113,6 +122,17 @@ typedef struct nes_video_api {
 
 	/** Show this plugin's own settings dialog. May be NULL. */
 	void (*configure)(void* self);
+
+	/**
+	 * Native window handle -- HWND, X11 Window -- or NULL.
+	 *
+	 * So the host can parent a dialog to the emulator's window. Added after
+	 * version 1 was defined, and deliberately at the end: a module built
+	 * against the older header declares a smaller size, the host sees that its
+	 * struct stops short of this field, and does not call it. No version bump,
+	 * no broken plugin. That is what the size is for.
+	 */
+	void* (*native_window)(void* self);
 } nes_video_api;
 
 /* ------------------------------------------------------------------------- */

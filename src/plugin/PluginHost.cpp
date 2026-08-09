@@ -106,6 +106,24 @@ const Entry* Registry::select(nes_plugin_kind kind, const std::string& preferred
 	return all.empty() ? nullptr : all[0];
 }
 
+bool hasConfigureDialog(const Entry& entry) {
+	if (!entry.info || !entry.api)
+		return false;
+	switch (entry.info->kind) {
+	case NES_PLUGIN_VIDEO:
+		return provides(static_cast<const nes_video_api*>(entry.api),
+				&nes_video_api::configure);
+	case NES_PLUGIN_AUDIO:
+		return provides(static_cast<const nes_audio_api*>(entry.api),
+				&nes_audio_api::configure);
+	case NES_PLUGIN_INPUT:
+		return provides(static_cast<const nes_input_api*>(entry.api),
+				&nes_input_api::configure);
+	default:
+		return false;
+	}
+}
+
 /* ------------------------------------------------------------------------- */
 /* Video                                                                      */
 /* ------------------------------------------------------------------------- */
@@ -161,6 +179,12 @@ bool VideoPlugin::saveScreenshot(const char* path) {
 void VideoPlugin::configure() {
 	if (m_self && provides(m_api, &nes_video_api::configure))
 		m_api->configure(m_self);
+}
+
+void* VideoPlugin::nativeWindow() const {
+	if (!m_self || !provides(m_api, &nes_video_api::native_window))
+		return nullptr;
+	return m_api->native_window(m_self);
 }
 
 /* ------------------------------------------------------------------------- */

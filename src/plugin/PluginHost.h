@@ -104,6 +104,15 @@ private:
 	unsigned long m_refused = 0;
 };
 
+/**
+ * True when @p entry's plugin offers a settings dialog of its own.
+ *
+ * Two ways it may not: the pointer is null, or the module was built against an
+ * older header that had no such field and its declared size stops short of one.
+ * Both mean the same thing to a caller, so both answer false.
+ */
+bool hasConfigureDialog(const Entry& entry);
+
 /* ------------------------------------------------------------------------- */
 /* Adapters                                                                   */
 /* ------------------------------------------------------------------------- */
@@ -128,6 +137,9 @@ public:
 
 	/** Show the plugin's own dialog, if it has one. */
 	void configure();
+
+	/** Native window handle for a dialog to sit over, or null. */
+	void* nativeWindow() const;
 
 private:
 	const nes_video_api* m_api;
