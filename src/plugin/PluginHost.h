@@ -18,10 +18,30 @@
 #include "nes_plugin.h"
 #include "../frontend/Backend.h"
 
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace nesplug {
+
+class Module;
+
+/**
+ * Base for the three adapters: holds the module the instance came from.
+ *
+ * A plugin instance calls functions that live inside its library, so the
+ * library must outlive it. Rather than trusting an ordering somewhere in
+ * main(), every adapter keeps a reference to its own module and the question
+ * answers itself. A built-in plugin has no module and keeps nothing.
+ */
+class ModuleBound {
+public:
+	virtual ~ModuleBound();
+	void keepAlive(const std::shared_ptr<const Module>& module) { m_module = module; }
+
+private:
+	std::shared_ptr<const Module> m_module;
+};
 
 /** One available plugin: its descriptor and its api, however it got here. */
 struct Entry {
@@ -29,6 +49,14 @@ struct Entry {
 	const void* api;
 	/** Empty for a built-in; the file it came from otherwise. */
 	std::string path;
+	/**
+	 * The library this came out of, or null for a built-in.
+	 *
+	 * Held so that an entry outliving the loader's own vector still keeps its
+	 * library mapped, and so that anything created from it can inherit the
+	 * reference rather than depending on somebody's scope.
+	 */
+	std::shared_ptr<const Module> module;
 
 	Entry() : info(nullptr), api(nullptr) { }
 };
@@ -52,7 +80,8 @@ public:
 	 * @return false if it was refused.
 	 */
 	bool add(std::uint32_t abiVersion, const nes_plugin_info* info, const void* api,
-			const std::string& path = std::string(), std::string* warning = nullptr);
+			const std::string& path = std::string(), std::string* warning = nullptr,
+			const std::shared_ptr<const Module>& module = std::shared_ptr<const Module>());
 
 	/** Everything registered of one kind, in registration order. */
 	std::vector<const Entry*> ofKind(nes_plugin_kind kind) const;
@@ -86,7 +115,7 @@ private:
  * without a plugin at all.
  */
 
-class VideoPlugin : public nesfe::VideoSink {
+class VideoPlugin : public nesfe::VideoSink, public ModuleBound {
 public:
 	VideoPlugin(const nes_video_api* api, const nes_host* host);
 	~VideoPlugin();
@@ -105,7 +134,7 @@ private:
 	void* m_self;
 };
 
-class AudioPlugin : public nesfe::AudioSink {
+class AudioPlugin : public nesfe::AudioSink, public ModuleBound {
 public:
 	AudioPlugin(const nes_audio_api* api, const nes_host* host);
 	~AudioPlugin();
@@ -124,7 +153,7 @@ private:
 	void* m_self;
 };
 
-class InputPlugin : public nesfe::InputSource {
+class InputPlugin : public nesfe::InputSource, public ModuleBound {
 public:
 	InputPlugin(const nes_input_api* api, const nes_host* host);
 	~InputPlugin();

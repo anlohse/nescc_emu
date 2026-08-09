@@ -99,6 +99,7 @@ if(NES_BUILD_GUI)
         src/frontend/SdlBackend.cpp
         src/frontend/SdlPlugin.cpp
         src/plugin/PluginHost.cpp
+        src/plugin/Module.cpp
     )
     target_link_libraries(nes_gui PRIVATE nes_lib SDL2::SDL2)
 
@@ -107,6 +108,30 @@ if(NES_BUILD_GUI)
     if(TARGET SDL2::SDL2main)
         target_link_libraries(nes_gui PRIVATE SDL2::SDL2main)
     endif()
+
+    # --------------------------------------------------------------------------
+    # Loadable plugins
+    # --------------------------------------------------------------------------
+    # Built into a plugins/ folder beside the executable, which is where the
+    # host looks. Deliberately not linked against nes_lib: a plugin talks to the
+    # host through the C ABI and nothing else, and keeping the emulator core out
+    # of its link line is what proves it.
+    add_library(nes_audio_sdl MODULE src/plugins/audio_sdl/audio_sdl.cpp)
+    target_link_libraries(nes_audio_sdl PRIVATE SDL2::SDL2)
+    set_target_properties(nes_audio_sdl PROPERTIES
+        OUTPUT_NAME "audio_sdl"
+        PREFIX ""
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/plugins"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/plugins"
+    )
+    foreach(config Debug Release RelWithDebInfo MinSizeRel)
+        string(TOUPPER ${config} CONFIG_UPPER)
+        set_target_properties(nes_audio_sdl PROPERTIES
+            LIBRARY_OUTPUT_DIRECTORY_${CONFIG_UPPER} "${CMAKE_BINARY_DIR}/bin/${config}/plugins"
+            RUNTIME_OUTPUT_DIRECTORY_${CONFIG_UPPER} "${CMAKE_BINARY_DIR}/bin/${config}/plugins"
+        )
+    endforeach()
+    add_dependencies(nes_gui nes_audio_sdl)
 endif()
 
 # ------------------------------------------------------------------------------
@@ -180,10 +205,13 @@ if(NES_BUILD_GUI AND NES_BUILD_TESTS)
         src/GuiConfig.cpp
         src/frontend/App.cpp
         src/plugin/PluginHost.cpp
+        src/plugin/Module.cpp
     )
     target_link_libraries(nes_gui_test PRIVATE nes_lib SDL2::SDL2 doctest::doctest)
     if(TARGET SDL2::SDL2main)
         target_link_libraries(nes_gui_test PRIVATE SDL2::SDL2main)
     endif()
+    # The loader tests open the real audio plugin, so it has to exist first.
+    add_dependencies(nes_gui_test nes_audio_sdl)
     add_test(NAME nes_gui_test COMMAND nes_gui_test)
 endif()

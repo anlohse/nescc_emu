@@ -11,6 +11,7 @@
 #include "frontend/App.h"
 #include "frontend/SdlBackend.h"
 #include "frontend/SdlPlugin.h"
+#include "plugin/Module.h"
 #include "plugin/PluginHost.h"
 #include "nes/Nes.h"
 
@@ -20,7 +21,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <memory>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -59,6 +62,16 @@ bool startsWith(const char* s, const char* prefix, const char** rest) {
 		return false;
 	*rest = s + n;
 	return true;
+}
+
+/** A `plugins` folder beside the executable, like nes.cfg is beside it. */
+std::string pluginDirectory() {
+	char* base = SDL_GetBasePath();
+	if (!base)
+		return "plugins";
+	std::string result = std::string(base) + "plugins";
+	SDL_free(base);
+	return result;
 }
 
 } // namespace
@@ -138,12 +151,30 @@ int main(int argc, char* argv[]) {
 	// breaks the build now rather than a stranger's .dll later.
 	nesplug::Registry registry;
 	std::string warning;
+
+	// Loadable modules first, so one dropped into the folder beats the copy
+	// compiled in. That is the point of being able to drop one in.
+	const std::vector<std::shared_ptr<nesplug::Module> > modules =
+			nesplug::loadModules(pluginDirectory(), &warning);
+	for (std::size_t i = 0; i < modules.size(); i++) {
+		registry.add(NES_PLUGIN_ABI_VERSION, modules[i]->info(), modules[i]->api(),
+				modules[i]->path(), &warning, modules[i]);
+		SDL_Log("loaded %s from %s", modules[i]->info()->name,
+				modules[i]->path().c_str());
+	}
+
+	// Then the built-ins, which lose any id a module already claimed. That is
+	// the expected outcome of dropping a plugin in, not a problem, so it goes
+	// to the log rather than to stderr with the real warnings.
+	std::string shadowed;
 	registry.add(nesfe::sdlPluginAbiVersion(), nesfe::sdlVideoInfo(),
-			nesfe::sdlVideoApi(), std::string(), &warning);
+			nesfe::sdlVideoApi(), std::string(), &shadowed);
 	registry.add(nesfe::sdlPluginAbiVersion(), nesfe::sdlAudioInfo(),
-			nesfe::sdlAudioApi(), std::string(), &warning);
+			nesfe::sdlAudioApi(), std::string(), &shadowed);
 	registry.add(nesfe::sdlPluginAbiVersion(), nesfe::sdlInputInfo(),
-			nesfe::sdlInputApi(), std::string(), &warning);
+			nesfe::sdlInputApi(), std::string(), &shadowed);
+	if (!shadowed.empty())
+		SDL_Log("%s", shadowed.c_str());
 	if (!warning.empty())
 		std::fprintf(stderr, "%s\n", warning.c_str());
 
@@ -159,8 +190,14 @@ int main(int argc, char* argv[]) {
 		return 1;
 	}
 
-	nesplug::VideoPlugin video(
-			static_cast<const nes_video_api*>(videoEntry->api), nullptr);
+	std::unique_ptr<nesplug::VideoPlugin> videoOwner =
+			nesplug::createFrom<nesplug::VideoPlugin>(*videoEntry, nullptr);
+	if (!videoOwner) {
+		std::fprintf(stderr, "video plugin could not be created\n");
+		SDL_Quit();
+		return 1;
+	}
+	nesplug::VideoPlugin& video = *videoOwner;
 	nesfe::VideoOptions videoOptions;
 	videoOptions.scale = scale;
 	videoOptions.fullscreen = fullscreen;
@@ -172,14 +209,28 @@ int main(int argc, char* argv[]) {
 	SDL_Log("video plugin: %s", videoEntry->info->name);
 
 	nesfe::App::Options appOptions;
-	nesplug::AudioPlugin audio(
-			audioEntry ? static_cast<const nes_audio_api*>(audioEntry->api) : nullptr,
-			nullptr);
+	std::unique_ptr<nesplug::AudioPlugin> audioOwner;
+	if (audioEntry)
+		audioOwner = nesplug::createFrom<nesplug::AudioPlugin>(*audioEntry, nullptr);
+	if (!audioOwner) {
+		// No audio plugin at all is a quiet emulator, not a broken one. The
+		// adapter tolerates a null api, so the run loop needs no special case.
+		audioOwner.reset(new nesplug::AudioPlugin(nullptr, nullptr));
+	}
+	nesplug::AudioPlugin& audio = *audioOwner;
 	if (wantAudio && audioEntry && !audio.open(appOptions.audioSampleRate, &error))
 		std::fprintf(stderr, "%s\n", error.c_str());   // silent, not fatal
+	if (audioEntry)
+		SDL_Log("audio plugin: %s", audioEntry->info->name);
 
-	nesplug::InputPlugin input(
-			static_cast<const nes_input_api*>(inputEntry->api), nullptr);
+	std::unique_ptr<nesplug::InputPlugin> inputOwner =
+			nesplug::createFrom<nesplug::InputPlugin>(*inputEntry, nullptr);
+	if (!inputOwner) {
+		std::fprintf(stderr, "input plugin could not be created\n");
+		SDL_Quit();
+		return 1;
+	}
+	nesplug::InputPlugin& input = *inputOwner;
 	input.open(nullptr);
 	SDL_Log("input plugin: %s", inputEntry->info->name);
 

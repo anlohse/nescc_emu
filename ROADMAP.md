@@ -104,9 +104,25 @@ knowing before reading the header:
    speaks. The SDL backends reach the run loop through it on every run, so the boundary
    cannot rot unnoticed — a mistake in its shape is a compile error today rather than a
    crash in a stranger's library later.
-2. **Real shared libraries**, one kind at a time, audio first: it has the narrowest
-   interface and no window coupling. Nothing in the api structs changes; what gets added
-   is `dlopen`/`LoadLibrary`, symbol lookup, and a search path.
+2. ~~**Real shared libraries**, audio first.~~ Done for audio. `plugins/audio_sdl.dll`
+   is loaded from a folder beside the executable, and a module found there shadows the
+   built-in of the same id -- which is the point of being able to drop one in. Nothing
+   in the api structs changed, exactly as predicted; what got added is `Module`
+   (LoadLibrary/dlopen behind RAII), directory scanning, and the typed creation below.
+
+   Two things worth recording. **An instance keeps its library mapped**: every function
+   it calls lives in the library's address space, so `Module::create<T>()` hands the new
+   object a `shared_ptr` to its own module rather than trusting a vector somewhere to
+   stay in scope. Getting that wrong crashes at shutdown, on someone else's machine, in
+   a stack trace naming nothing, so the types enforce it instead of a comment.
+   **The kind check cannot be a cast**: the api is a C struct with no RTTI, and a
+   `static_cast` from `void*` would reinterpret an audio api as a video one and crash on
+   the third call. `PluginTraits<T>` says what is expected at compile time and the
+   descriptor is checked at run time.
+
+   Video and input remain built in. They are harder for a real reason -- the host owns
+   the window and the event pump -- and are worth doing after the dialogs, when there is
+   something to configure.
 3. **Dialogs.** Each plugin's own `configure()`, plus a host dialog for choosing between
    them. This is the part that multiplies the work — a settings dialog needs a toolkit,
    and one per plugin means several in one process.

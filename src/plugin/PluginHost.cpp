@@ -5,6 +5,10 @@
 
 namespace nesplug {
 
+// Out of line so the destructor of the shared_ptr member -- and with it any
+// call to Module's destructor -- is emitted where Module is a complete type.
+ModuleBound::~ModuleBound() { }
+
 namespace {
 
 /**
@@ -30,7 +34,8 @@ bool provides(const Api* api, Member Api::* member) {
 /* ------------------------------------------------------------------------- */
 
 bool Registry::add(std::uint32_t abiVersion, const nes_plugin_info* info,
-		const void* api, const std::string& path, std::string* warning) {
+		const void* api, const std::string& path, std::string* warning,
+		const std::shared_ptr<const Module>& module) {
 	const char* where = path.empty() ? "built-in plugin" : path.c_str();
 
 	// The version first, and before touching anything else the module gave us:
@@ -70,6 +75,7 @@ bool Registry::add(std::uint32_t abiVersion, const nes_plugin_info* info,
 	entry.info = info;
 	entry.api = api;
 	entry.path = path;
+	entry.module = module;
 	m_entries.push_back(entry);
 	return true;
 }

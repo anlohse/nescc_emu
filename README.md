@@ -36,6 +36,7 @@ that keeps the status bar fixed while the level moves beneath it all work.
 | APU mixing | the hardware's nonlinear curve, high-pass and anti-alias filtering |
 | Backends | video, audio, input and clock behind interfaces; SDL is one implementation |
 | Plugin ABI | C boundary with a version handshake; the SDL backends already go through it |
+| Loadable plugins | `plugins/audio_sdl` is a real shared library; a module shadows the built-in of the same id |
 | Window | `nes_gui`: SDL2 video and audio, keyboard, paced to NTSC's 60.0988 Hz |
 | Headless runner | `nes_run`: tracing, scripted input, PPM screenshots, WAV capture |
 
@@ -47,6 +48,8 @@ src/             Cartridge (iNES), Mapper (seven boards), Ppu, Apu, Controller,
                  NesBus, Nes, main.cpp (headless runner)
 src/plugin/      nes_plugin.h -- the C plugin ABI: version, descriptor, api structs
                  PluginHost   -- registry, version handshake, C-to-C++ adapters
+                 Module       -- LoadLibrary/dlopen behind RAII, typed creation
+src/plugins/     audio_sdl -- the first backend to leave the executable
 src/frontend/    Backend.h  -- video, audio, input and clock as abstract classes
                  App.cpp    -- the run loop, written against those and nothing else
                  SdlBackend -- one SDL implementation of each
@@ -68,11 +71,23 @@ the same version handshake, the same descriptor, the same struct of function
 pointers a shared library will export. Exercising the boundary on every run is what
 keeps it from rotting while nothing external uses it yet.
 
+Audio has already left the executable: `plugins/audio_sdl` is a real shared library,
+loaded from a folder beside the program, and a module found there shadows the
+built-in with the same id. Delete it and the emulator falls back and still makes
+sound. Video and input are still compiled in, for a reason worth knowing --
+
 The host owns the window and the event pump. That is not an accident of this
-implementation -- one platform event queue carries window, keyboard and pad events
+implementation: one platform event queue carries window, keyboard and pad events
 together, so two separately loaded modules cannot both own it.
-[ROADMAP.md](ROADMAP.md) has the four stages and the two design constraints that
-shaped them.
+
+The lifetime rule is the other thing to know before writing a plugin. An instance
+keeps its library mapped, because every function it calls lives inside that library;
+`Module::create<T>()` hands each new object a reference to its own module rather than
+relying on something staying in scope. And because a C api struct carries no RTTI, the
+kind is checked against the descriptor at run time -- a cast would happily reinterpret
+an audio plugin as a video one and crash later.
+
+[ROADMAP.md](ROADMAP.md) has the four stages and the constraints that shaped them.
 
 ## Building
 
