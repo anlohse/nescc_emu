@@ -187,6 +187,16 @@ void* VideoPlugin::nativeWindow() const {
 	return m_api->native_window(m_self);
 }
 
+bool VideoPlugin::windowToFrame(int windowX, int windowY,
+		int* frameX, int* frameY) const {
+	*frameX = -1;
+	*frameY = -1;
+	if (!m_self || !provides(m_api, &nes_video_api::window_to_frame))
+		return false;
+	m_api->window_to_frame(m_self, windowX, windowY, frameX, frameY);
+	return *frameX >= 0 && *frameY >= 0;
+}
+
 /* ------------------------------------------------------------------------- */
 /* Audio                                                                      */
 /* ------------------------------------------------------------------------- */
@@ -292,6 +302,26 @@ void InputPlugin::poll(nesfe::InputState* out) {
 	out->buttons[1] = state.buttons[1];
 	out->commands = state.commands;
 	out->turbo = state.turbo != 0;
+}
+
+bool InputPlugin::pollZapper(nesfe::ZapperState* out) {
+	if (!m_self || !provides(m_api, &nes_input_api::poll_zapper))
+		return false;
+
+	// Zeroed and sized by the host. The plugin is told how much room there is
+	// so a module built against a later header cannot write past the end of a
+	// buffer this side allocated.
+	nes_zapper_state state;
+	std::memset(&state, 0, sizeof(state));
+	state.size = sizeof(state);
+	m_api->poll_zapper(m_self, &state);
+
+	out->connected = state.connected != 0;
+	out->port = (state.port == 0) ? 0 : 1;
+	out->windowX = state.window_x;
+	out->windowY = state.window_y;
+	out->trigger = state.trigger != 0;
+	return out->connected;
 }
 
 void InputPlugin::configure() {

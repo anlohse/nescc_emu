@@ -108,10 +108,22 @@ bool SdlVideo::open(const VideoOptions& options, Error* error) {
 		close();
 		return false;
 	}
+
+	// The arrow sits exactly where a light gun is being aimed, which is the one
+	// place a player needs to see. Hiding it costs nothing when there is no gun:
+	// this is a television, and there is nothing in the picture to point at.
+	//
+	// SDL answers WM_SETCURSOR (and its equivalents) only for HTCLIENT on its own
+	// windows, so this hides the arrow over the picture and nowhere else -- the
+	// title bar, the borders and every dialog we put up keep their own cursor.
+	SDL_ShowCursor(SDL_DISABLE);
 	return true;
 }
 
 void SdlVideo::close() {
+	// Whoever opens a window next gets the cursor back in the state they would
+	// expect to find it, rather than one this instance left behind.
+	SDL_ShowCursor(SDL_ENABLE);
 	if (m_texture) { SDL_DestroyTexture(m_texture); m_texture = nullptr; }
 	if (m_renderer) { SDL_DestroyRenderer(m_renderer); m_renderer = nullptr; }
 	if (m_window) { SDL_DestroyWindow(m_window); m_window = nullptr; }
@@ -144,6 +156,26 @@ void* SdlVideo::nativeWindow() const {
 	// knows what to do with it, and the only dialog so far is Win32's.
 	return nullptr;
 #endif
+}
+
+void SdlVideo::windowToFrame(int windowX, int windowY, int* frameX, int* frameY) const {
+	*frameX = -1;
+	*frameY = -1;
+	if (!m_renderer)
+		return;
+
+	float logicalX = 0.0f;
+	float logicalY = 0.0f;
+	SDL_RenderWindowToLogical(m_renderer, windowX, windowY, &logicalX, &logicalY);
+
+	const int x = static_cast<int>(logicalX);
+	const int y = static_cast<int>(logicalY);
+	// Outside the picture is a real answer here, not a failure: the player is
+	// pointing the gun at the letterbox, or off the television entirely.
+	if (x < 0 || y < 0 || x >= m_width || y >= m_height)
+		return;
+	*frameX = x;
+	*frameY = y;
 }
 
 void SdlVideo::setTitle(const char* title) {
@@ -293,6 +325,18 @@ int SdlInput::portOf(SDL_JoystickID id) const {
 		if (m_pads[port] && instanceId(m_pads[port]) == id)
 			return port;
 	return -1;
+}
+
+void SdlInput::pollZapper(ZapperState* out) {
+	int x = 0;
+	int y = 0;
+	const Uint32 buttons = SDL_GetMouseState(&x, &y);
+
+	out->connected = true;
+	out->port = 1;              // the Zapper's port on every game that uses one
+	out->windowX = x;
+	out->windowY = y;
+	out->trigger = (buttons & SDL_BUTTON(SDL_BUTTON_LEFT)) != 0;
 }
 
 void SdlInput::configure() {

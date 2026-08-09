@@ -375,6 +375,32 @@ void Ppu::redrawRestOfLine() {
 	renderScanline(m_scanline, m_dot - 1);
 }
 
+bool Ppu::lightAt(int x, int y) const {
+	if (x < 0 || y < 0 || x >= SCREEN_WIDTH || y >= SCREEN_HEIGHT)
+		return false;
+
+	const std::uint32_t rgb =
+			nesPaletteRgb()[m_framebuffer[y * SCREEN_WIDTH + x] & 0x3F];
+	const int r = (rgb >> 16) & 0xFF;
+	const int g = (rgb >> 8) & 0xFF;
+	const int b = rgb & 0xFF;
+
+	// Rec. 601 luma, the weighting the composite signal itself carries, and so
+	// what a sensor watching that signal responds to.
+	const int luma = (r * 299 + g * 587 + b * 114) / 1000;
+
+	// Near-white only. The threshold has to clear every bright colour a game
+	// puts on screen as scenery, and those go higher than they look: Duck
+	// Hunt's foliage green is luma 172 and its lightest grey is 171. A game
+	// blanks the screen and asks whether the gun sees anything before it
+	// believes a shot at all, so a background counted as light does not merely
+	// score wrongly -- it makes every shot fail that check and be discarded.
+	//
+	// What a game does strobe at a target is $30 or $20, both pure white at
+	// 255, which leaves plenty of room above the scenery.
+	return luma >= 200;
+}
+
 bool Ppu::takeNmi() {
 	const bool pending = m_nmiPending;
 	m_nmiPending = false;

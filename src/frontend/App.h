@@ -86,6 +86,22 @@ public:
 	}
 
 	/**
+	 * Route a light gun onto a controller port.
+	 *
+	 * Two plugins have to meet for this and neither can do it alone: the input
+	 * plugin knows where the mouse is, in window pixels, and the video plugin
+	 * knows how the picture sits inside the window. The host holds both, so the
+	 * host is where they are joined -- which is also why an input plugin never
+	 * has to care which video plugin is loaded.
+	 *
+	 * @param poll     fills a ZapperState; false when there is no gun.
+	 * @param toFrame  turns window pixels into console pixels; false when the
+	 *                 point is outside the picture, which is a real answer.
+	 */
+	void setZapperSource(std::function<bool(ZapperState*)> poll,
+			std::function<bool(int, int, int*, int*)> toFrame);
+
+	/**
 	 * Run one frame: poll input, act on it, step the console, present, pace.
 	 * @return false once the player has asked to quit.
 	 */
@@ -105,6 +121,7 @@ public:
 
 private:
 	void applyCommands(const InputState& state);
+	void updateZapper();
 	void pumpAudio(bool generating);
 	void pace();
 
@@ -129,6 +146,8 @@ private:
 	int m_shotIndex;
 
 	std::function<void()> m_settingsHandler;
+	std::function<bool(ZapperState*)> m_pollZapper;
+	std::function<bool(int, int, int*, int*)> m_windowToFrame;
 
 	unsigned long m_frames;
 	unsigned long m_rebases;

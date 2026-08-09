@@ -320,6 +320,14 @@ int main(int argc, char* argv[]) {
 			std::fprintf(stderr, "could not write %s\n", configPath.c_str());
 	});
 
+	// The light gun. Two plugins meet here and nowhere else: one knows where
+	// the mouse is, the other knows where the picture is.
+	app.setZapperSource(
+			[&input](nesfe::ZapperState* out) { return input.pollZapper(out); },
+			[&video](int wx, int wy, int* fx, int* fy) {
+				return video.windowToFrame(wx, wy, fx, fy);
+			});
+
 	app.run();
 
 	// Before tearing anything down: closing the window must not cost a save.

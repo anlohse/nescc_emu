@@ -38,6 +38,14 @@ public:
 	/** The native handle -- HWND, X11 Window -- for a dialog to sit over. */
 	void* nativeWindow() const;
 
+	/**
+	 * Which console pixel a window pixel falls on, or -1 outside the picture.
+	 *
+	 * SDL's renderer already knows: it is doing the letterboxing and the
+	 * scaling, so asking it is both shorter and right at any window size.
+	 */
+	void windowToFrame(int windowX, int windowY, int* frameX, int* frameY) const;
+
 private:
 	SDL_Window* m_window;
 	SDL_Renderer* m_renderer;
@@ -84,6 +92,16 @@ public:
 	bool open(Error* error) override;
 	void close() override;
 	void poll(InputState* out) override;
+
+	/**
+	 * The mouse, as a light gun on port two.
+	 *
+	 * Reported whenever the emulator asks; whether the console listens is
+	 * decided by whether the loaded game is a light-gun game. Position is in
+	 * window pixels -- turning those into console pixels belongs to the video
+	 * plugin, which is the only thing that knows the scale and the letterboxing.
+	 */
+	void pollZapper(ZapperState* out);
 
 	/**
 	 * This plugin's own settings: the bindings dialog.

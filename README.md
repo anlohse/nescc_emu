@@ -30,6 +30,7 @@ that keeps the status bar fixed while the level moves beneath it all work.
 | Sprite-zero hit | reported at the dot of overlap, so mid-frame splits work |
 | OAM DMA (`$4014`) | copies the page and stalls the CPU 513 cycles |
 | Controllers (`$4016/$4017`) | both ports, latch and shift register, open bus in the high bits |
+| Zapper | the mouse as a light gun on port two: light sensed from the picture, both bits active low |
 | Battery saves | `.sav` beside the ROM, loaded on start, written on exit and reset |
 | APU channels | two pulses with sweep, triangle, noise, DMC — all five |
 | APU frame counter | 4- and 5-step sequences, quarter/half clocks, frame IRQ |
@@ -187,6 +188,12 @@ runs unthrottled, `R` resets, `F1` opens the plugin chooser, `F12` saves a scree
 the window size, `--fullscreen` starts borderless, `--no-audio` runs silent; the picture
 letterboxes to the NES's aspect at any window size, with nearest-neighbour scaling.
 
+A light-gun game plays with the mouse: aim in the window and click. The cursor is hidden
+over the picture — it sits exactly where you are aiming, which is the one place you need
+to see — and stays visible on the title bar and in every dialog. Where the picture is on
+screen is the video plugin's business, so the host asks it to turn the mouse position
+into a console pixel; a controller plugin never has to know what is drawing.
+
 Audio is 44.1 kHz mono, queued rather than driven from a callback thread — the emulator
 produces samples in frame-sized bursts on the main thread, and the device's own buffer
 smooths them out. Sound and video are paced by two clocks nobody synchronised, so the
@@ -268,6 +275,16 @@ to be seen, because a game samples the pad once per frame in its NMI handler. `P
 
 Buttons are `a`, `b`, `select`, `start`, `up`, `down`, `left`, `right`. Overlapping
 presses combine, so `--press=right@100:60 --press=b@100:60` is a run.
+
+The Zapper is scripted the same way, with `--shoot=X,Y@FRAME[:HELD]` in console pixels:
+
+```bash
+./build/bin/Release/nes_run duckhunt.nes --press=start@60 --press=start@200 --shoot=237,124@980:12 --frames=1040 --screenshot=hit.ppm
+```
+
+Giving any `--shoot` plugs a gun into port two instead of a pad. The trigger has to be
+held across several frames, because the game blanks the screen for a frame after it is
+pulled and only then looks for light.
 
 ## Testing
 

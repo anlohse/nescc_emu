@@ -131,6 +131,21 @@ public:
 	 */
 	const std::uint8_t* framebuffer() const { return m_framebuffer.data(); }
 
+	/**
+	 * Is the picture bright enough at (@p x, @p y) for a light gun to see it?
+	 *
+	 * Lives here because this is the only place that holds both the framebuffer
+	 * and the palette it means anything in. A phototransistor answers to
+	 * luminance, not to colour, so the palette entry is weighted the way an eye
+	 * -- or a television's luma -- would weight it.
+	 *
+	 * The frame is sampled as it stands right now, part-drawn if the beam has
+	 * not reached the bottom yet, because that is what the gun would be seeing.
+	 * A game aims a white box at one target at a time and reads immediately, so
+	 * an average over the finished frame would answer about the wrong thing.
+	 */
+	bool lightAt(int x, int y) const;
+
 	/** 64 entries of packed 0x00RRGGBB for the NES's fixed colour palette. */
 	static const std::uint32_t* nesPaletteRgb();
 

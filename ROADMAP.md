@@ -148,24 +148,48 @@ knowing before reading the header:
 
    Still to come: `configure()` for video and audio. Both are still built in, and their
    Settings buttons in the chooser are correctly disabled.
-4. **The Zapper**, as a second controller plugin. The proof the architecture holds.
+4. ~~**The Zapper**, as a second controller plugin. The proof the architecture holds.~~
+   Done, and the architecture held: what the ABI grew is two functions on the end of
+   two existing structs — `poll_zapper` on the input api, `window_to_frame` on the
+   video one — plus a `nes_zapper_state` carrying its own size, set by the host, so a
+   newer plugin cannot write past an older host's buffer. Neither plugin can do this
+   alone. The input plugin knows where the mouse is in *window* pixels; the video
+   plugin is the only thing that knows how the picture sits inside the window. The host
+   joins them, which is what keeps the graph a star.
+
+   Two things were wrong in the references and had to be settled against the game.
+   **Bit 4 is active low too.** With the bit set while the trigger is held, Duck Hunt
+   consumes a bullet and never starts its shot sequence at all; with it clear, the
+   screen blanks four frames later exactly as it should. Both bits being active low is
+   the more sensible piece of hardware anyway — a closed switch and a conducting
+   phototransistor each pull their line down. **The brightness threshold matters more
+   than it looks.** Duck Hunt's foliage green has a luma of 172, so a threshold of 160
+   made scenery count as light, and the game's own "screen blanked, so I should see
+   nothing" check then discarded *every* shot. It is 200 now; the strobe is pure white.
+
+   Verified end to end against the multicart: `--shoot=237,124@980:12` scores
+   `001000` and marks the duck hit, `--shoot=120,40@980:12` scores nothing and the duck
+   flies on. The aim point came from instrumenting the emulator to report the brightest
+   thing on screen each frame, which found the strobe as a 32x32 white box at
+   (222-253, 109-140) — 190 pixels from where reading a screenshot had suggested.
 
 ## Input, properly
 
 1. ~~**Backend interface**~~ — done. Everything below plugs into it.
 2. ~~**Gamepad support** via SDL's game-controller API.~~ Done.
 3. ~~**Remapping**~~ — done, as a binding table per port in `nes.cfg`.
-4. **A configuration dialog.** Editing a file works, but binding a key by pressing it is
-   what people expect. SDL alone has no widgets, so this needs either Dear ImGui (small,
-   self-contained, no external toolkit) or a native dialog per platform. ImGui is the
-   pragmatic choice and would also give a debugger UI later. `Config` already round-trips
-   through disk, so a dialog would only need to edit the struct and save it.
-5. **The Zapper.** A well-scoped and genuinely fun addition: sample the framebuffer at
-   the mouse position for brightness, and report it on `$4017` bit 3 (inverted — the
-   bit is *clear* when light is seen) with the trigger on bit 4. Duck Hunt is an NROM
-   cartridge, so nothing else has to change. The subtlety is that games strobe the
-   screen white for a frame to test each target in turn, so the light sense has to
-   reflect what is on screen *now* rather than an average.
+4. ~~**A configuration dialog.**~~ Done, as a native dialog rather than Dear ImGui. The
+   choice went that way because the dialog has to be reachable while the emulator is
+   running and must not fight SDL for the event queue: a modal native window runs its
+   own loop and hands control back when it closes. `Config` already round-tripped
+   through disk, so the dialog only edits the struct and saves it. Only Win32 exists so
+   far; elsewhere it says so rather than opening nothing.
+5. ~~**The Zapper.**~~ Done — see the plugin section above for what it cost and what
+   the hardware references got wrong. The subtlety anticipated here was the real one:
+   a game strobes the screen white for a frame to test each target in turn, so the
+   light sense reads the framebuffer as it stands rather than an average, and the aim
+   point is applied before the frame runs so it is already in place when the game reads
+   the gun partway down the picture it is drawing.
 
 ## Accuracy, when it starts to matter
 

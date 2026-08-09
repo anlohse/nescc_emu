@@ -133,6 +133,21 @@ typedef struct nes_video_api {
 	 * no broken plugin. That is what the size is for.
 	 */
 	void* (*native_window)(void* self);
+
+	/**
+	 * Turn a point in the window into a point on the console's screen.
+	 *
+	 * Only this plugin knows how the picture is laid out inside the window --
+	 * the scale it chose, the letterboxing, whether it is fullscreen. A light
+	 * gun reports where the mouse is and something has to say which pixel that
+	 * is; nobody else is in a position to.
+	 *
+	 * Writes -1 to both when the point is outside the picture, which for a
+	 * light gun means pointed away from the television and is a real answer
+	 * rather than an error.
+	 */
+	void (*window_to_frame)(void* self, int window_x, int window_y,
+			int* frame_x, int* frame_y);
 } nes_video_api;
 
 /* ------------------------------------------------------------------------- */
@@ -175,6 +190,27 @@ typedef struct nes_input_state {
 	int turbo;
 } nes_input_state;
 
+/**
+ * Where a light gun is pointing, and whether its trigger is held.
+ *
+ * Separate from nes_input_state rather than added to it, and for a reason worth
+ * writing down: nes_input_state is filled in by the plugin, so growing it would
+ * let a module built against a newer header write past the end of a buffer an
+ * older host allocated. A new struct with its own size, set by the host before
+ * the call, cannot do that.
+ *
+ * Coordinates are in window pixels. Converting them to console pixels is the
+ * video plugin's job, because only it knows how the picture is laid out.
+ */
+typedef struct nes_zapper_state {
+	size_t size;        /* set by the host; the plugin must not write beyond it */
+	int connected;      /* 1 when a light gun is being used at all */
+	int port;           /* which controller port it occupies: 0 or 1 */
+	int window_x;
+	int window_y;
+	int trigger;        /* 1 while pulled */
+} nes_zapper_state;
+
 typedef struct nes_input_api {
 	size_t size;
 
@@ -188,6 +224,15 @@ typedef struct nes_input_api {
 	void (*poll)(void* self, nes_input_state* out);
 
 	void (*configure)(void* self);
+
+	/**
+	 * Where the light gun is, if this plugin offers one.
+	 *
+	 * Optional and asked for separately from poll(), so a plugin that knows
+	 * nothing about light guns needs no change and a host that does not want
+	 * one need never ask.
+	 */
+	void (*poll_zapper)(void* self, nes_zapper_state* out);
 } nes_input_api;
 
 /* ------------------------------------------------------------------------- */

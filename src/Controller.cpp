@@ -2,7 +2,16 @@
 
 namespace nes {
 
-Controller::Controller() : m_buttons(0), m_shift(0), m_strobe(false) { }
+Controller::Controller() :
+		m_buttons(0), m_shift(0), m_strobe(false),
+		m_device(DEVICE_PAD), m_zapperX(-1), m_zapperY(-1),
+		m_zapperTrigger(false) { }
+
+void Controller::setZapper(int x, int y, bool trigger) {
+	m_zapperX = x;
+	m_zapperY = y;
+	m_zapperTrigger = trigger;
+}
 
 void Controller::setButtons(std::uint8_t mask) {
 	m_buttons = mask;

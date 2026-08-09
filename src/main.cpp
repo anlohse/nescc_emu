@@ -17,6 +17,20 @@
 
 namespace {
 
+/**
+ * A scripted light-gun shot: aim at a pixel, and pull the trigger for a while.
+ *
+ * The aim is held for the whole span rather than only while firing, because a
+ * light-gun game samples the sensor before and after the trigger to check the
+ * gun is pointed at a television rather than at a lamp.
+ */
+struct ScriptedShot {
+	int x;
+	int y;
+	unsigned long long startFrame;
+	unsigned long long endFrame;
+};
+
 /** A scripted button press: hold @a buttons from @a startFrame for @a frames. */
 struct ScriptedPress {
 	std::uint8_t buttons;
@@ -122,6 +136,10 @@ void usage(const char* argv0) {
 		"                      --press=right@260:120    Right for 120 frames\n"
 		"                      --press=a@300:4/2        A on the second pad\n"
 		"                    buttons: a b select start up down left right\n"
+		"  --shoot=SPEC      aim a Zapper on port 2 and fire; repeatable\n"
+		"                    SPEC is X,Y@FRAME[:HELD], e.g.\n"
+		"                      --shoot=128,90@400:20    at (128,90) from frame 400\n"
+		"                    Port 2 becomes a light gun as soon as one is given.\n"
 		"\n"
 		"Trace format matches the register fields of the standard nestest log:\n"
 		"  C000  4C F5 C5  JMP $c5f5   A:00 X:00 Y:00 P:24 SP:FD CYC:7\n",
@@ -143,6 +161,38 @@ bool startsWith(const char* s, const char* prefix, const char** rest) {
  * per frame, and menus commonly want to see the button held across two or three
  * before acting. Ten is a comfortable default -- about a sixth of a second.
  */
+/** Parse X,Y@FRAME[:HELD] for --shoot. */
+bool parseShot(const char* spec, ScriptedShot* out) {
+	char* end = nullptr;
+	out->x = static_cast<int>(std::strtol(spec, &end, 10));
+	if (end == spec || *end != ',')
+		return false;
+
+	const char* rest = end + 1;
+	out->y = static_cast<int>(std::strtol(rest, &end, 10));
+	if (end == rest || *end != '@')
+		return false;
+
+	rest = end + 1;
+	const unsigned long long start = std::strtoull(rest, &end, 10);
+	if (end == rest)
+		return false;
+
+	unsigned long long held = 10;
+	if (*end == ':') {
+		rest = end + 1;
+		held = std::strtoull(rest, &end, 10);
+		if (end == rest)
+			return false;
+	}
+	if (*end != 0 || held == 0)
+		return false;
+
+	out->startFrame = start;
+	out->endFrame = start + held;
+	return true;
+}
+
 bool parsePress(const char* spec, ScriptedPress* out) {
 	const char* at = std::strchr(spec, '@');
 	if (!at || at == spec)
@@ -238,6 +288,7 @@ int main(int argc, char** argv) {
 	long startPc = -1;
 	long long maxInstructions = 100000000LL;
 	std::vector<ScriptedPress> presses;
+	std::vector<ScriptedShot> shots;
 
 	for (int i = 1; i < argc; i++) {
 		const char* rest = nullptr;
@@ -264,6 +315,13 @@ int main(int argc, char** argv) {
 				return 2;
 			}
 			presses.push_back(press);
+		} else if (startsWith(argv[i], "--shoot=", &rest)) {
+			ScriptedShot shot;
+			if (!parseShot(rest, &shot)) {
+				std::fprintf(stderr, "bad --shoot spec: %s\n", rest);
+				return 2;
+			}
+			shots.push_back(shot);
 		} else if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
 			usage(argv[0]);
 			return 0;
@@ -305,6 +363,13 @@ int main(int argc, char** argv) {
 			cart->hasBusConflicts() ? ", bus conflicts" : "");
 
 	console.reset();
+
+	// Asking for a shot is what says a light gun is plugged in. The console
+	// cannot tell on its own -- both devices answer the same two pins.
+	if (!shots.empty()) {
+		console.controller(1).setDevice(nes::Controller::DEVICE_ZAPPER);
+		console.controller(1).setZapper(-1, -1, false);
+	}
 	if (startPc >= 0)
 		console.cpuRegisters().pc = static_cast<uint16>(startPc);
 
@@ -324,6 +389,7 @@ int main(int argc, char** argv) {
 
 	long long executed = 0;
 	std::uint64_t lastInputFrame = ~std::uint64_t(0);
+	std::uint64_t lastShotFrame = ~std::uint64_t(0);
 	while (executed < maxInstructions) {
 		if (frames >= 0 && console.ppu().frame() >= frameTarget)
 			break;
@@ -340,6 +406,23 @@ int main(int argc, char** argv) {
 					held[press.port] |= press.buttons;
 			console.controller(0).setButtons(held[0]);
 			console.controller(1).setButtons(held[1]);
+		}
+
+		if (!shots.empty() && frame != lastShotFrame) {
+			lastShotFrame = frame;
+			int x = -1;
+			int y = -1;
+			bool trigger = false;
+			for (const ScriptedShot& shot : shots) {
+				if (frame < shot.startFrame || frame >= shot.endFrame)
+					continue;
+				x = shot.x;
+				y = shot.y;
+				trigger = true;
+			}
+			// Off-screen between shots, which is what a gun resting in a lap
+			// reads as, and what the game expects to see when nobody is firing.
+			console.controller(1).setZapper(x, y, trigger);
 		}
 
 		const Registers& r = console.cpuRegisters();

@@ -126,6 +126,14 @@ private:
 	/** One CPU cycle's worth of time, charged before an access is served. */
 	void cycle();
 
+	/**
+	 * What a light gun on port two answers with.
+	 *
+	 * Here rather than in Controller because it needs the picture: the gun
+	 * reports what it can see, and only the PPU knows what is on screen.
+	 */
+	std::uint8_t readZapper() const;
+
 	std::array<std::uint8_t, 0x800> m_ram;
 	Cartridge* m_cartridge;
 	Ppu* m_ppu;

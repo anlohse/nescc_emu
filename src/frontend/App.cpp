@@ -105,6 +105,35 @@ void App::applyCommands(const InputState& state) {
 	}
 }
 
+void App::setZapperSource(std::function<bool(ZapperState*)> poll,
+		std::function<bool(int, int, int*, int*)> toFrame) {
+	m_pollZapper = poll;
+	m_windowToFrame = toFrame;
+	// Port two, because that is the port every light-gun game reads. The device
+	// is set once rather than per frame: a console does not learn what is
+	// plugged in, it simply answers the pins it has.
+	m_console.controller(1).setDevice(nes::Controller::DEVICE_ZAPPER);
+}
+
+void App::updateZapper() {
+	if (!m_pollZapper)
+		return;
+
+	ZapperState gun;
+	if (!m_pollZapper(&gun) || !gun.connected)
+		return;
+
+	int frameX = -1;
+	int frameY = -1;
+	if (m_windowToFrame)
+		m_windowToFrame(gun.windowX, gun.windowY, &frameX, &frameY);
+
+	// Off the picture stays negative, and the console reads that as no light --
+	// which is what pointing the gun away from the television does, and what a
+	// game checks before it believes a shot.
+	m_console.controller(gun.port).setZapper(frameX, frameY, gun.trigger);
+}
+
 void App::pumpAudio(bool generating) {
 	if (m_audio.isOpen() && generating) {
 		m_audioOut.clear();
@@ -155,6 +184,10 @@ bool App::runFrame() {
 
 	for (int port = 0; port < 2; port++)
 		m_console.controller(port).setButtons(state.buttons[port]);
+
+	// Before the frame runs, so the aim point is already in place when the game
+	// reads the gun partway down the picture it is about to draw.
+	updateZapper();
 
 	// Fast-forward produces frames faster than the device can play them, so
 	// rather than pitch everything up, stop generating and drop what is queued.

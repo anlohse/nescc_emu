@@ -22,7 +22,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 # sibling directory wins whenever it exists. Its tests and debugger stay off.
 set(EMU6502_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../emu6502" CACHE PATH
     "Path to a local emu6502 checkout; fetched from git if this does not exist")
-set(EMU6502_GIT_REPOSITORY "https://github.com/anlohse/emu6205cc.git" CACHE STRING
+set(EMU6502_GIT_REPOSITORY "https://github.com/anlohse/emu6502cc.git" CACHE STRING
     "Where to fetch the 6502 core when no local checkout is present")
 set(EMU6502_GIT_TAG "main" CACHE STRING
     "Branch or tag of the 6502 core to fetch")

@@ -105,6 +105,28 @@ void NesBus::endInstruction(int cycles) {
 	advance(owed);
 }
 
+std::uint8_t NesBus::readZapper() const {
+	const Controller& gun = m_controllers[1];
+	// Bit 3 is inverted: the phototransistor pulls the line down when it sees
+	// light, so the bit is CLEAR on a hit and set the rest of the time. A gun
+	// pointed away from the television is the same as one seeing nothing, which
+	// is exactly the case Duck Hunt checks before it believes a shot.
+	std::uint8_t value = Controller::ZAPPER_LIGHT;
+	if (m_ppu && gun.zapperOnScreen()
+			&& m_ppu->lightAt(gun.zapperX(), gun.zapperY()))
+		value = 0;
+
+	// Bit 4 is inverted too, which is the part no two references agree on.
+	// Determined against Duck Hunt: with the bit set while the trigger is held
+	// the game never begins its shot sequence at all, and with it clear the
+	// screen blanks four frames later exactly as it should. Both bits being
+	// active low is also the more sensible piece of hardware -- a closed switch
+	// and a conducting phototransistor each pull their line down.
+	if (!gun.zapperTrigger())
+		value |= Controller::ZAPPER_TRIGGER;
+	return value;
+}
+
 /* ------------------------------------------------------------------------- */
 /* Access                                                                     */
 /* ------------------------------------------------------------------------- */
@@ -126,8 +148,11 @@ uint8 NesBus::read(uint16 address) {
 		// registers this must never be served from peek().
 		if (address == JOY1)
 			return m_controllers[0].read() | CONTROLLER_OPEN_BUS;
-		if (address == JOY2)
+		if (address == JOY2) {
+			if (m_controllers[1].device() == Controller::DEVICE_ZAPPER)
+				return readZapper() | CONTROLLER_OPEN_BUS;
 			return m_controllers[1].read() | CONTROLLER_OPEN_BUS;
+		}
 		// Reading $4015 acknowledges the APU's frame interrupt, so this must be
 		// the real read and never peek().
 		if (address == APU_STATUS)

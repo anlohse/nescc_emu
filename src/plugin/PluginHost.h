@@ -141,6 +141,15 @@ public:
 	/** Native window handle for a dialog to sit over, or null. */
 	void* nativeWindow() const;
 
+	/**
+	 * Which console pixel a window pixel falls on.
+	 *
+	 * @return false when the point is outside the picture, or when this plugin
+	 *         is too old to answer. Both mean the same to a light gun: pointed
+	 *         somewhere that is not the television.
+	 */
+	bool windowToFrame(int windowX, int windowY, int* frameX, int* frameY) const;
+
 private:
 	const nes_video_api* m_api;
 	void* m_self;
@@ -173,6 +182,12 @@ public:
 	bool open(nesfe::Error* error) override;
 	void close() override;
 	void poll(nesfe::InputState* out) override;
+
+	/**
+	 * Ask for the light gun, if this plugin has one.
+	 * @return false when it does not, leaving @p out untouched.
+	 */
+	bool pollZapper(nesfe::ZapperState* out);
 
 	void configure();
 

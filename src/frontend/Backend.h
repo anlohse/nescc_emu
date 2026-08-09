@@ -144,6 +144,24 @@ struct InputState {
 };
 
 /**
+ * A light gun's aim and trigger, in window pixels.
+ *
+ * Window pixels rather than console pixels because the thing that knows where
+ * the mouse is and the thing that knows how the picture is laid out in the
+ * window are two different plugins. The host asks one, then the other.
+ */
+struct ZapperState {
+	bool connected;
+	int port;
+	int windowX;
+	int windowY;
+	bool trigger;
+
+	ZapperState() :
+			connected(false), port(1), windowX(-1), windowY(-1), trigger(false) { }
+};
+
+/**
  * Whoever is pressing the buttons.
  *
  * One call per frame produces both the pad state and any commands, because on

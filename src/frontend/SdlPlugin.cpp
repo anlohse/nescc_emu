@@ -83,6 +83,12 @@ void* videoNativeWindow(void* self) {
 	return static_cast<nesfe::SdlVideo*>(self)->nativeWindow();
 }
 
+void videoWindowToFrame(void* self, int windowX, int windowY,
+		int* frameX, int* frameY) {
+	static_cast<nesfe::SdlVideo*>(self)->windowToFrame(windowX, windowY,
+			frameX, frameY);
+}
+
 const nes_video_api VIDEO_API = {
 	sizeof(nes_video_api),
 	videoCreate,
@@ -93,7 +99,8 @@ const nes_video_api VIDEO_API = {
 	videoSetTitle,
 	videoSaveScreenshot,
 	nullptr,          // no settings dialog yet; the host checks before calling
-	videoNativeWindow
+	videoNativeWindow,
+	videoWindowToFrame
 };
 
 const nes_plugin_info VIDEO_INFO = {
@@ -216,6 +223,21 @@ void inputConfigure(void* self) {
 	static_cast<nesfe::SdlInput*>(self)->configure();
 }
 
+void inputPollZapper(void* self, nes_zapper_state* out) {
+	// The host said how much room there is. Writing a field it has no space
+	// for is the one way a newer plugin can corrupt an older host.
+	if (!out || out->size < sizeof(nes_zapper_state))
+		return;
+
+	nesfe::ZapperState state;
+	static_cast<nesfe::SdlInput*>(self)->pollZapper(&state);
+	out->connected = state.connected ? 1 : 0;
+	out->port = state.port;
+	out->window_x = state.windowX;
+	out->window_y = state.windowY;
+	out->trigger = state.trigger ? 1 : 0;
+}
+
 const nes_input_api INPUT_API = {
 	sizeof(nes_input_api),
 	inputCreate,
@@ -223,7 +245,8 @@ const nes_input_api INPUT_API = {
 	inputOpen,
 	inputClose,
 	inputPoll,
-	inputConfigure
+	inputConfigure,
+	inputPollZapper
 };
 
 const nes_plugin_info INPUT_INFO = {
