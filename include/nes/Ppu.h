@@ -103,6 +103,17 @@ public:
 	int dot() const { return m_dot; }
 	std::uint64_t frame() const { return m_frame; }
 	bool inVBlank() const { return (m_status & STATUS_VBLANK) != 0; }
+
+	/**
+	 * How many times a $2002 read has landed in the three dots at the top of
+	 * vblank and cost the CPU that frame's interrupt.
+	 *
+	 * Worth being able to see. A game polling $2002 in a tight loop passes
+	 * through that window regularly, so this is a count of real events, not of
+	 * a theoretical edge case -- and if a game ever misbehaves, this is the
+	 * first number to look at.
+	 */
+	unsigned long vblankRaces() const { return m_vblankRaces; }
 	bool renderingEnabled() const {
 		return (m_mask & (MASK_SHOW_BACKGROUND | MASK_SHOW_SPRITES)) != 0;
 	}
@@ -128,7 +139,22 @@ private:
 	std::uint16_t mirrorNametable(std::uint16_t address) const;
 	static std::uint16_t mirrorPalette(std::uint16_t address);
 
-	void renderScanline(int line);
+	/**
+	 * Draw @p line from pixel @p fromX rightwards, using the state right now.
+	 *
+	 * Called once at the start of every visible line, and again from partway
+	 * across whenever a register write changes something the rest of the line
+	 * would be drawn differently for. The second call redraws only the tail, so
+	 * a line nothing is written during comes out exactly as it always did.
+	 *
+	 * Sprites are evaluated on the first call only: hardware picks them during
+	 * the previous line and latches their patterns, so they cannot change
+	 * partway across.
+	 */
+	void renderScanline(int line, int fromX = 0);
+
+	/** Redraw the rest of the current line, if a write just changed how it looks. */
+	void redrawRestOfLine();
 	void incrementY();
 	void copyHorizontalBits();
 	void copyVerticalBits();
@@ -167,7 +193,24 @@ private:
 	std::uint64_t m_frame;
 	bool m_nmiPending;
 
+	// The race at the top of vblank. Reading $2002 as the flag goes up loses the
+	// CPU that frame's interrupt, because the /NMI line is pulled down and let
+	// go again before the CPU ever samples it. Three dots decide it, so both
+	// sides have to be dated: how long ago the flag went up, and whether a read
+	// landed on the dot just before it was due to.
+	int m_dotsSinceVblank;      // capped; large means "not near the boundary"
+	bool m_suppressVblank;      // a read got in first; the flag must not come up
+	unsigned long m_vblankRaces;
+
 	std::array<std::uint8_t, SCREEN_WIDTH * SCREEN_HEIGHT> m_framebuffer;
+
+	// Sprite output for the line being drawn, kept so the tail of a line can be
+	// redrawn without evaluating sprites again -- which would be wrong as well
+	// as wasteful, since hardware latches them before the line starts.
+	std::array<std::uint8_t, SCREEN_WIDTH> m_sprPattern;
+	std::array<std::uint8_t, SCREEN_WIDTH> m_sprAttribute;
+	std::array<bool, SCREEN_WIDTH> m_sprBehind;
+	std::array<bool, SCREEN_WIDTH> m_sprIsZero;
 	// Dot at which sprite 0 overlaps the background on the current scanline, or
 	// -1. The flag is raised when the counter reaches it rather than when the
 	// line is drawn, because games poll for it and then change scroll mid-frame.

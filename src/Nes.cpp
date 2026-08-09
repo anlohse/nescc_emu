@@ -7,8 +7,7 @@ namespace nes {
 Nes::Nes() : m_regs(), m_cartridge(), m_ppu(nullptr), m_apu(),
 		m_bus(new NesBus(nullptr, &m_ppu, &m_apu)), m_clock(),
 		m_cpu(new Processor(m_bus.get(), &m_regs, &m_clock)),
-		m_region(Region::Ntsc), m_dotNumerator(3), m_dotDenominator(1),
-		m_dotRemainder(0) {
+		m_region(Region::Ntsc) {
 	std::memset(&m_regs, 0, sizeof(m_regs));
 	// The DMC fetches its samples over the CPU bus, like a second bus master.
 	m_apu.setBus(m_bus.get());
@@ -51,14 +50,7 @@ void Nes::setCartridge(std::unique_ptr<Cartridge> cartridge) {
 	m_region = m_cartridge ? m_cartridge->region() : Region::Ntsc;
 	m_ppu.setRegion(m_region);
 	m_apu.setRegion(m_region);
-	if (m_region == Region::Pal) {
-		m_dotNumerator = 16;   // 3.2 dots per CPU cycle
-		m_dotDenominator = 5;
-	} else {
-		m_dotNumerator = 3;
-		m_dotDenominator = 1;
-	}
-	m_dotRemainder = 0;
+	m_bus->setRegion(m_region);
 }
 
 void Nes::reset() {
@@ -70,7 +62,7 @@ void Nes::reset() {
 	m_regs.sr = FLAG__ | FLAG_I;
 	m_regs.pc = m_bus->read(0xFFFC) | (m_bus->read(0xFFFD) << 8);
 	m_cpu->clearInterrupts();
-	m_dotRemainder = 0;
+	m_bus->setRegion(m_region);   // also clears the carried dot fraction
 	m_clock.reset();
 	m_clock.beginCycle();
 	m_clock.waitCycles(7); // the reset sequence costs 7 cycles
@@ -85,22 +77,21 @@ int Nes::step() {
 	// rather than ignored.
 	const int stall = m_bus->takeDmaStall() + m_apu.takeDmcStall();
 	if (stall > 0) {
+		// Time the CPU spends off the bus entirely, so there is nothing to
+		// distribute: it all happens, and then the CPU resumes.
 		m_clock.waitCycles(stall);
 		cycles = stall;
+		m_bus->advance(cycles);
 	} else {
-		// A board that cares how close two writes are needs to know where one
-		// instruction ends and the next begins; nothing below this line does.
-		if (m_cartridge)
-			m_cartridge->beginInstruction();
+		// The bus advances the PPU and APU a cycle at a time as the instruction
+		// makes its accesses, so a device is read at the cycle it is read at.
+		// endInstruction() settles whatever the accesses did not account for.
+		m_bus->beginInstruction();
 		const std::uint64_t before = m_clock.cycles();
 		m_cpu->step();
 		cycles = static_cast<int>(m_clock.cycles() - before);
+		m_bus->endInstruction(cycles);
 	}
-
-	m_dotRemainder += cycles * m_dotNumerator;
-	m_ppu.tick(m_dotRemainder / m_dotDenominator);
-	m_dotRemainder %= m_dotDenominator;
-	m_apu.tick(cycles);
 
 	if (m_ppu.takeNmi())
 		m_cpu->nmi();

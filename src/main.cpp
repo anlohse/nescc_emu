@@ -444,5 +444,14 @@ int main(int argc, char** argv) {
 	if (console.bus().stubReads() || console.bus().stubWrites())
 		std::fprintf(stderr, "note: %lu reads and %lu writes hit unimplemented APU/input registers\n",
 				console.bus().stubReads(), console.bus().stubWrites());
+	// Should be impossible -- an instruction cannot make more bus accesses than
+	// it has cycles -- but if it ever happened the PPU would quietly run ahead
+	// of the CPU clock, and a silent drift is worse than a noisy one.
+	if (console.ppu().vblankRaces())
+		std::fprintf(stderr, "note: %lu $2002 reads landed in the vblank race window\n",
+				console.ppu().vblankRaces());
+	if (console.bus().overrunInstructions())
+		std::fprintf(stderr, "warning: %lu instructions made more accesses than they had cycles\n",
+				console.bus().overrunInstructions());
 	return 0;
 }

@@ -501,3 +501,260 @@ TEST_CASE("horizontal_scroll_shifts_the_background") {
 		CHECK_EQ(pixelAt(ppu, 13, 0), 0x0F);
 	}
 }
+
+/* ------------------------------------------------------------------------ */
+/* The $2002 read race                                                       */
+/* ------------------------------------------------------------------------ */
+
+/*
+ * The vblank flag goes up at scanline 241, dot 1. A CPU that reads $2002 right
+ * as that happens loses the interrupt for the frame: the /NMI line is pulled
+ * down and let go again before the CPU ever samples it. Three dots decide it,
+ * and the CPU is on the losing side of all three -- what changes across them is
+ * only whether the flag itself reads back set.
+ *
+ * Games that poll $2002 for vblank rather than taking the NMI never notice,
+ * which is why so few titles depend on this either way.
+ */
+
+namespace {
+
+/**
+ * Run `LDA $2002` with NMI enabled, positioned so the vblank flag goes up
+ * @p dotsAway dots into the instruction.
+ *
+ * LDA absolute is four cycles and its data read is the fourth, so the read
+ * lands 12 dots in. Parking the PPU at dot 342 - dotsAway of scanline 240 puts
+ * the raise where this case wants it.
+ *
+ * @param flagSet   filled with what the read returned in bit 7
+ * @param nmiTaken  filled with whether the CPU vectored to its NMI handler
+ */
+void runVblankRace(int dotsAway, bool* flagSet, bool* nmiTaken) {
+	std::vector<std::uint8_t> prg;
+	testrom::setResetVector(prg, 0xC000);
+	prg[0x0000] = 0xA9;  prg[0x0001] = 0x80;                    // LDA #$80
+	prg[0x0002] = 0x8D;  prg[0x0003] = 0x00;  prg[0x0004] = 0x20;  // STA $2000
+	prg[0x0005] = 0xAD;  prg[0x0006] = 0x02;  prg[0x0007] = 0x20;  // LDA $2002
+	prg[0x0008] = 0x4C;  prg[0x0009] = 0x08;  prg[0x000A] = 0xC0;  // JMP $C008
+	prg[0x0100] = 0x40;                                          // RTI at $C100
+	prg[0x3FFA] = 0x00;  prg[0x3FFB] = 0xC1;                     // NMI -> $C100
+
+	auto cart = Cartridge::fromINes(testrom::build(testrom::Options(), prg));
+	REQUIRE(cart != nullptr);
+
+	Nes console;
+	console.setCartridge(std::move(cart));
+	console.reset();
+
+	console.step();                       // LDA #$80
+	console.step();                       // STA $2000 -- NMI enabled
+	REQUIRE_EQ(console.cpuRegisters().pc, 0xC005);
+
+	const int parkDot = 342 - dotsAway;
+	while (!(console.ppu().scanline() == 240 && console.ppu().dot() == parkDot))
+		console.ppu().tick(1);
+
+	console.step();                       // LDA $2002
+	*flagSet = (console.cpuRegisters().a & 0x80) != 0;
+
+	// The program spins on a 3-cycle JMP from here. Give the raise time to
+	// happen and the NMI to be serviced -- ten instructions is thirty cycles,
+	// comfortably past the boundary and nowhere near the next frame's vblank,
+	// so a suppressed interrupt stays suppressed for the whole window.
+	*nmiTaken = false;
+	for (int i = 0; i < 10 && !*nmiTaken; i++) {
+		console.step();
+		*nmiTaken = console.cpuRegisters().pc == 0xC100;
+	}
+}
+
+} // namespace
+
+TEST_CASE("reading_2002_as_vblank_is_raised_loses_the_interrupt") {
+	bool flag = false, nmi = false;
+
+	// Two dots before the read: clear of the race entirely. This is the control
+	// -- everything below differs from it by one or two dots.
+	runVblankRace(10, &flag, &nmi);
+	CHECK(flag);
+	CHECK(nmi);
+
+	// One dot before the read. The flag is genuinely up and reads back set, but
+	// clearing it pulls /NMI up again before the CPU sampled it.
+	runVblankRace(11, &flag, &nmi);
+	CHECK(flag);
+	CHECK_FALSE(nmi);
+
+	// The same dot. The read and the flag collide and the read comes away with
+	// nothing at all.
+	runVblankRace(12, &flag, &nmi);
+	CHECK_FALSE(flag);
+	CHECK_FALSE(nmi);
+
+	// One dot early: the flag has not come up yet, and now it never will.
+	runVblankRace(13, &flag, &nmi);
+	CHECK_FALSE(flag);
+	CHECK_FALSE(nmi);
+
+	// Well clear on the other side: an ordinary frame, nothing suppressed.
+	runVblankRace(22, &flag, &nmi);
+	CHECK_FALSE(flag);        // the raise has not happened yet when the read lands
+	CHECK(nmi);               // but it happens before the instruction ends
+}
+
+TEST_CASE("a_suppressed_vblank_costs_only_that_frame") {
+	// The flag is cancelled, not disabled. The next frame must be normal, or a
+	// game that loses one interrupt would lose all of them.
+	std::vector<std::uint8_t> prg;
+	testrom::setResetVector(prg, 0xC000);
+	prg[0x0000] = 0xAD;  prg[0x0001] = 0x02;  prg[0x0002] = 0x20;  // LDA $2002
+	prg[0x0003] = 0x4C;  prg[0x0004] = 0x03;  prg[0x0005] = 0xC0;  // JMP $C003
+
+	auto cart = Cartridge::fromINes(testrom::build(testrom::Options(), prg));
+	REQUIRE(cart != nullptr);
+
+	Nes console;
+	console.setCartridge(std::move(cart));
+	console.reset();
+
+	// Land the read one dot before the raise, so the flag is suppressed.
+	while (!(console.ppu().scanline() == 240 && console.ppu().dot() == 329))
+		console.ppu().tick(1);
+	console.step();
+	CHECK_FALSE(console.ppu().inVBlank());
+
+	// Run to the next vblank and check it comes up as usual.
+	const std::uint64_t frame = console.ppu().frame();
+	while (console.ppu().frame() == frame)
+		console.step();
+	while (!(console.ppu().scanline() == Ppu::VBLANK_SCANLINE
+			&& console.ppu().dot() > 4))
+		console.step();
+	CHECK(console.ppu().inVBlank());
+}
+
+/* ------------------------------------------------------------------------ */
+/* Mid-scanline rendering                                                    */
+/* ------------------------------------------------------------------------ */
+
+/*
+ * A line is drawn from the state at its start, and redrawn from partway across
+ * whenever a write changes something the rest of it depends on: the mask, the
+ * background pattern table, fine X, or v itself. A line nothing is written
+ * during comes out exactly as it did before any of this existed.
+ *
+ * None of the commercial ROMs to hand exercise it visibly -- Super Mario Bros
+ * is the only one that writes mid-line at all, and its split lands on a
+ * uniform band of sky where a few pixels of shift look identical. So the
+ * behaviour is pinned here instead.
+ */
+
+namespace {
+
+/** A PPU with one opaque tile repeated across the nametable and rendering on. */
+void setUpSolidBackground(Ppu& ppu) {
+	ppu.writeRegister(1, Ppu::MASK_SHOW_BACKGROUND | Ppu::MASK_SHOW_BG_LEFT);
+
+	// Palette: backdrop $0F, and colour 1 of palette 0 as $30.
+	ppu.writeRegister(6, 0x3F);
+	ppu.writeRegister(6, 0x00);
+	ppu.writeRegister(7, 0x0F);
+	ppu.writeRegister(7, 0x30);
+
+	// Tile 1: every pixel pattern value 1.
+	for (int row = 0; row < 8; row++) {
+		ppu.writeRegister(6, 0x00);
+		ppu.writeRegister(6, static_cast<std::uint8_t>(0x10 + row));
+		ppu.writeRegister(7, 0xFF);              // low plane
+	}
+	for (int row = 0; row < 8; row++) {
+		ppu.writeRegister(6, 0x00);
+		ppu.writeRegister(6, static_cast<std::uint8_t>(0x18 + row));
+		ppu.writeRegister(7, 0x00);              // high plane
+	}
+
+	// Fill the first nametable with tile 1.
+	ppu.writeRegister(6, 0x20);
+	ppu.writeRegister(6, 0x00);
+	for (int i = 0; i < 32 * 30; i++)
+		ppu.writeRegister(7, 0x01);
+
+	// Point v back at the top-left so rendering starts there.
+	ppu.writeRegister(6, 0x20);
+	ppu.writeRegister(6, 0x00);
+}
+
+/** Tick to dot @p dot of scanline @p line. */
+void tickTo(Ppu& ppu, int line, int dot) {
+	while (!(ppu.scanline() == line && ppu.dot() == dot))
+		ppu.tick(1);
+}
+
+} // namespace
+
+TEST_CASE("a_mid_line_mask_write_only_changes_the_rest_of_the_line") {
+	auto cart = makeCart();
+	REQUIRE(cart != nullptr);
+	Ppu ppu(cart.get());
+	setUpSolidBackground(ppu);
+
+	tickTo(ppu, 10, 100);
+	const std::uint8_t* row = ppu.framebuffer() + 10 * Ppu::SCREEN_WIDTH;
+	REQUIRE_EQ(row[0], 0x30);
+	REQUIRE_EQ(row[255], 0x30);
+
+	// Turn the background off partway across. Pixel x is produced at dot x + 1,
+	// so dot 100 means pixels 99 onwards are still to come.
+	ppu.writeRegister(1, 0x00);
+
+	CHECK_EQ(row[0], 0x30);        // already drawn, and it stays drawn
+	CHECK_EQ(row[98], 0x30);
+	CHECK_EQ(row[99], 0x0F);       // from here on, backdrop
+	CHECK_EQ(row[255], 0x0F);
+}
+
+TEST_CASE("a_mid_line_fine_x_write_shifts_only_the_rest_of_the_line") {
+	// Fine X feeds the pixel multiplexer directly, so it is the one part of a
+	// $2005 write the line being drawn can see. Coarse X goes to t and does not
+	// reach v until the end of the line.
+	auto cart = makeCart();
+	REQUIRE(cart != nullptr);
+	Ppu ppu(cart.get());
+	setUpSolidBackground(ppu);
+
+	// Make the left half of the nametable's first row a transparent tile so a
+	// horizontal shift is visible as a moving edge.
+	ppu.writeRegister(6, 0x20);
+	ppu.writeRegister(6, 0x00);
+	for (int i = 0; i < 16; i++)
+		ppu.writeRegister(7, 0x00);              // tile 0: all pattern 0
+	ppu.writeRegister(6, 0x20);
+	ppu.writeRegister(6, 0x00);
+
+	tickTo(ppu, 2, 100);
+	const std::uint8_t* row = ppu.framebuffer() + 2 * Ppu::SCREEN_WIDTH;
+	REQUIRE_EQ(row[127], 0x0F);                  // inside the transparent run
+	REQUIRE_EQ(row[128], 0x30);                  // the edge, at 16 tiles across
+
+	ppu.writeRegister(5, 0x04);                  // fine X = 4, first write
+	CHECK_EQ(row[98], 0x0F);                     // untouched, still transparent
+	CHECK_EQ(row[123], 0x0F);
+	CHECK_EQ(row[124], 0x30);                    // the edge moved left by 4
+}
+
+TEST_CASE("a_line_written_to_only_in_hblank_is_drawn_as_one_piece") {
+	// The guarantee that keeps every existing game rendering as it did: if
+	// nothing is written while the line is being drawn, nothing is redrawn.
+	auto cart = makeCart();
+	REQUIRE(cart != nullptr);
+	Ppu ppu(cart.get());
+	setUpSolidBackground(ppu);
+
+	tickTo(ppu, 10, 300);                        // past the visible pixels
+	ppu.writeRegister(1, 0x00);                  // hblank write
+
+	const std::uint8_t* row = ppu.framebuffer() + 10 * Ppu::SCREEN_WIDTH;
+	for (int x = 0; x < Ppu::SCREEN_WIDTH; x++)
+		REQUIRE_EQ(row[x], 0x30);                // the whole line survives
+}

@@ -29,7 +29,9 @@ const int OAM_DMA_CYCLES = 513;
 
 NesBus::NesBus(Cartridge* cartridge, Ppu* ppu, Apu* apu) :
 		m_ram(), m_cartridge(cartridge), m_ppu(ppu), m_apu(apu), m_dmaStall(0),
-		m_stubReads(0), m_stubWrites(0) {
+		m_stubReads(0), m_stubWrites(0),
+		m_dotNumerator(3), m_dotDenominator(1), m_dotRemainder(0),
+		m_ticking(false), m_accountedCycles(0), m_overruns(0) {
 	m_ram.fill(0);
 }
 
@@ -43,7 +45,73 @@ int NesBus::takeDmaStall() {
 	return stall;
 }
 
+/* ------------------------------------------------------------------------- */
+/* Time                                                                       */
+/* ------------------------------------------------------------------------- */
+
+void NesBus::setRegion(Region region) {
+	if (region == Region::Pal) {
+		m_dotNumerator = 16;    // 3.2 dots per CPU cycle
+		m_dotDenominator = 5;
+	} else {
+		m_dotNumerator = 3;
+		m_dotDenominator = 1;
+	}
+	m_dotRemainder = 0;
+}
+
+void NesBus::advance(int cycles) {
+	if (cycles <= 0)
+		return;
+
+	// The APU's DMC reads its samples over this same bus, like a second bus
+	// master. Those reads must not charge time of their own: the fetch costs
+	// the CPU a stall that is accounted separately, and letting it tick from in
+	// here would recurse.
+	const bool wasTicking = m_ticking;
+	m_ticking = false;
+
+	m_dotRemainder += cycles * m_dotNumerator;
+	if (m_ppu)
+		m_ppu->tick(m_dotRemainder / m_dotDenominator);
+	m_dotRemainder %= m_dotDenominator;
+	if (m_apu)
+		m_apu->tick(cycles);
+
+	m_ticking = wasTicking;
+}
+
+void NesBus::cycle() {
+	if (!m_ticking)
+		return;
+	m_accountedCycles++;
+	advance(1);
+}
+
+void NesBus::beginInstruction() {
+	if (m_cartridge)
+		m_cartridge->beginInstruction();
+	m_accountedCycles = 0;
+	m_ticking = true;
+}
+
+void NesBus::endInstruction(int cycles) {
+	m_ticking = false;
+	const int owed = cycles - m_accountedCycles;
+	if (owed < 0) {
+		m_overruns++;
+		return;
+	}
+	advance(owed);
+}
+
+/* ------------------------------------------------------------------------- */
+/* Access                                                                     */
+/* ------------------------------------------------------------------------- */
+
 uint8 NesBus::read(uint16 address) {
+	cycle();
+
 	if (address <= RAM_END)
 		return m_ram[address & RAM_MASK];
 
@@ -75,6 +143,8 @@ uint8 NesBus::read(uint16 address) {
 }
 
 void NesBus::write(uint16 address, uint8 val) {
+	cycle();
+
 	if (address <= RAM_END) {
 		m_ram[address & RAM_MASK] = val;
 		return;
@@ -91,11 +161,17 @@ void NesBus::write(uint16 address, uint8 val) {
 			// Copy a whole 256-byte page into OAM. The CPU is held off the bus
 			// while this happens, which the stall accounts for.
 			if (m_ppu) {
+				// The copy's own reads are not charged: the whole transfer is
+				// paid for by the stall below, and ticking here as well would
+				// advance the PPU twice over the same 513 cycles.
+				const bool wasTicking = m_ticking;
+				m_ticking = false;
 				const std::uint16_t base = static_cast<std::uint16_t>(val << 8);
 				std::uint8_t index = m_ppu->oamAddress();
 				for (int i = 0; i < 256; i++)
 					m_ppu->writeOam(static_cast<std::uint8_t>(index + i),
 							read(static_cast<uint16>(base + i)));
+				m_ticking = wasTicking;
 			}
 			m_dmaStall += OAM_DMA_CYCLES;
 			return;

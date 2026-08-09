@@ -179,3 +179,156 @@ TEST_CASE("nmi_vectors_through_the_cartridge") {
 	console.step();                          // RTI
 	CHECK_EQ(console.cpuRegisters().pc, 0xC000);
 }
+
+/* ------------------------------------------------------------------------ */
+/* Per-access timing                                                         */
+/* ------------------------------------------------------------------------ */
+
+/*
+ * The bus is where time passes. Every access the CPU makes during an
+ * instruction advances the PPU and APU a cycle first, so a device register is
+ * sampled at the cycle its access happens rather than at the instruction
+ * boundary before it. Whatever the accesses did not account for -- a taken
+ * branch, a page-crossing read, the internal cycles of a stack operation --
+ * is charged when the instruction ends, so the totals stay exact.
+ */
+
+TEST_CASE("each_access_advances_the_ppu_a_cycle") {
+	Nes console;
+	NesBus& bus = console.bus();
+	const Ppu& ppu = console.ppu();
+
+	const int start = ppu.dot();
+	bus.beginInstruction();
+	bus.read(0x0000);
+	CHECK_EQ(ppu.dot(), start + 3);
+	bus.read(0x0000);
+	CHECK_EQ(ppu.dot(), start + 6);
+	bus.write(0x0000, 0);
+	CHECK_EQ(ppu.dot(), start + 9);
+}
+
+TEST_CASE("the_instruction_pays_for_the_cycles_it_did_not_access_in") {
+	Nes console;
+	NesBus& bus = console.bus();
+	const Ppu& ppu = console.ppu();
+
+	// Three accesses inside an instruction that cost five cycles: the missing
+	// two are charged at the end, so the PPU still lands 15 dots on.
+	const int start = ppu.dot();
+	bus.beginInstruction();
+	bus.read(0x0000);
+	bus.read(0x0000);
+	bus.read(0x0000);
+	bus.endInstruction(5);
+	CHECK_EQ(ppu.dot(), start + 15);
+	CHECK_EQ(bus.overrunInstructions(), 0);
+}
+
+TEST_CASE("nothing_outside_an_instruction_charges_time") {
+	// The reset vector read, a debugger poking around, an OAM DMA copy: all
+	// reach this bus, and none of them is time the CPU is spending here.
+	Nes console;
+	NesBus& bus = console.bus();
+	const Ppu& ppu = console.ppu();
+
+	const int start = ppu.dot();
+	bus.read(0xFFFC);
+	bus.read(0x0000);
+	bus.write(0x0000, 0);
+	CHECK_EQ(ppu.dot(), start);
+}
+
+TEST_CASE("an_oam_dma_advances_the_ppu_once_not_twice") {
+	// The copy makes 256 reads through this same bus, and the transfer is paid
+	// for by the 513-cycle stall. Charging both would run the PPU at roughly
+	// one and a half times speed for the duration.
+	Nes console;
+	NesBus& bus = console.bus();
+
+	const std::uint64_t before = console.ppu().frame() * 1000000
+			+ static_cast<std::uint64_t>(console.ppu().scanline()) * 341
+			+ console.ppu().dot();
+
+	bus.beginInstruction();
+	bus.write(0x4014, 0x02);       // start a DMA out of page $0200
+	bus.endInstruction(4);
+
+	const std::uint64_t after = console.ppu().frame() * 1000000
+			+ static_cast<std::uint64_t>(console.ppu().scanline()) * 341
+			+ console.ppu().dot();
+
+	// Only the write's own instruction has been charged so far; the stall is
+	// still owed and Nes::step() spends it separately.
+	CHECK_EQ(after - before, 4 * 3);
+	CHECK_EQ(bus.pendingDmaStall(), 513);
+}
+
+TEST_CASE("a_running_console_never_overruns_its_cycle_budget") {
+	// The whole scheme rests on accesses being no more numerous than cycles.
+	// emu6502 pins that over all 256 opcodes; this checks it end to end, with
+	// real instructions running out of a real cartridge.
+	std::vector<std::uint8_t> prg;
+	testrom::setResetVector(prg, 0xC000);
+	prg[0x0000] = 0xEE;            // INC $0200  -- two writes, the worst case
+	prg[0x0001] = 0x00;
+	prg[0x0002] = 0x02;
+	prg[0x0003] = 0x4C;            // JMP $C000
+	prg[0x0004] = 0x00;
+	prg[0x0005] = 0xC0;
+
+	auto cart = Cartridge::fromINes(testrom::build(testrom::Options(), prg));
+	REQUIRE(cart != nullptr);
+
+	Nes console;
+	console.setCartridge(std::move(cart));
+	console.reset();
+	for (int i = 0; i < 20000; i++)
+		console.step();
+
+	CHECK_EQ(console.bus().overrunInstructions(), 0);
+}
+
+TEST_CASE("a_register_is_read_at_the_cycle_its_access_happens") {
+	// The point of all of it. LDA $2002 is four cycles, and the data read is
+	// the fourth -- so a vblank flag raised during the first three is already
+	// up by the time the CPU looks, and one raised after the instruction ends
+	// is not. Under whole-instruction timing both reads happened at the
+	// instruction's first cycle and neither could tell the difference.
+	//
+	// The PPU raises vblank at scanline 241, dot 1. Parking the PPU at dot D of
+	// scanline 240 puts that (341 - D) + 1 dots away.
+	struct Case { int parkDot; int dotsToVblank; bool expectFlag; };
+	const Case cases[] = {
+		{ 337,  5, true  },   // raised during cycle 2 of the instruction
+		{ 332, 10, true  },   // raised two dots before the read
+		{ 329, 13, false },   // raised one dot after the read
+		{ 320, 22, false },   // raised after the instruction is over
+	};
+
+	for (const Case& c : cases) {
+		CAPTURE(c.parkDot);
+		CAPTURE(c.dotsToVblank);
+
+		std::vector<std::uint8_t> prg;
+		testrom::setResetVector(prg, 0xC000);
+		prg[0x0000] = 0xAD;        // LDA $2002
+		prg[0x0001] = 0x02;
+		prg[0x0002] = 0x20;
+
+		auto cart = Cartridge::fromINes(testrom::build(testrom::Options(), prg));
+		REQUIRE(cart != nullptr);
+
+		Nes console;
+		console.setCartridge(std::move(cart));
+		console.reset();
+
+		// Park the PPU on the dot this case wants. Rendering is off, so no
+		// odd-frame skip complicates the count.
+		while (!(console.ppu().scanline() == 240 && console.ppu().dot() == c.parkDot))
+			console.ppu().tick(1);
+
+		console.step();
+		CHECK_EQ((console.cpuRegisters().a & 0x80) != 0, c.expectFlag);
+	}
+}

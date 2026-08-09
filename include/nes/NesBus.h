@@ -5,6 +5,7 @@
 #include "Cartridge.h"
 #include "Controller.h"
 #include "Ppu.h"
+#include "Region.h"
 
 #include <6502cc/emu_bus.h>
 
@@ -31,6 +32,12 @@ namespace nes {
  * $4017 is the one address whose meaning depends on direction. Reading it is
  * controller port two; writing it is the APU's frame counter. They are
  * unrelated registers that happen to share a pin.
+ *
+ * This is also where time passes. Every access the CPU makes while executing an
+ * instruction first advances the PPU and APU by one CPU cycle, so a device is
+ * sampled at the cycle its access happens rather than at the instruction
+ * boundary before it. That is the only place in the machine positioned to know
+ * when an access occurs -- the CPU reports cycles after the fact, in one lump.
  */
 class NesBus : public Bus {
 public:
@@ -51,6 +58,42 @@ public:
 
 	void setCartridge(Cartridge* cartridge) { m_cartridge = cartridge; }
 	Cartridge* cartridge() const { return m_cartridge; }
+
+	/** How many PPU dots a CPU cycle buys. Three on NTSC, 3.2 on PAL. */
+	void setRegion(Region region);
+
+	/**
+	 * The CPU is about to execute one instruction.
+	 *
+	 * Turns on per-access timing until endInstruction(): each read and write
+	 * advances the machine a cycle before it is served. Also tells the
+	 * cartridge, since a board may care where instructions begin for reasons of
+	 * its own -- MMC1 does.
+	 */
+	void beginInstruction();
+
+	/**
+	 * The instruction is over, having cost @p cycles.
+	 *
+	 * Accesses are not quite cycles: a taken branch, a page-crossing read and
+	 * the internal cycles of a stack operation each cost one without touching
+	 * the bus. Whatever the accesses did not account for is charged here, so
+	 * the totals still come out exact and only the distribution improves.
+	 *
+	 * Accesses are never the larger number -- emu6502 has a test over all 256
+	 * opcodes pinning that -- but if one ever were, overrunInstructions()
+	 * counts it rather than letting the PPU quietly run ahead of the clock.
+	 */
+	void endInstruction(int cycles);
+
+	/**
+	 * Advance the PPU and APU by @p cycles CPU cycles, all at once.
+	 *
+	 * For time the CPU is not executing through: DMA stalls, mostly. Devices
+	 * that read the bus while catching up -- the DMC fetching a sample -- do
+	 * not tick again from inside here.
+	 */
+	void advance(int cycles);
 
 	/** Zero the internal RAM. Real hardware powers up indeterminate. */
 	void clearRam();
@@ -76,7 +119,13 @@ public:
 	unsigned long stubReads() const { return m_stubReads; }
 	unsigned long stubWrites() const { return m_stubWrites; }
 
+	/** Instructions that made more bus accesses than they had cycles. Should be 0. */
+	unsigned long overrunInstructions() const { return m_overruns; }
+
 private:
+	/** One CPU cycle's worth of time, charged before an access is served. */
+	void cycle();
+
 	std::array<std::uint8_t, 0x800> m_ram;
 	Cartridge* m_cartridge;
 	Ppu* m_ppu;
@@ -85,6 +134,22 @@ private:
 	int m_dmaStall;
 	unsigned long m_stubReads;
 	unsigned long m_stubWrites;
+
+	// PPU dots per CPU cycle as a fraction: 3/1 on NTSC, 16/5 on PAL. PAL's
+	// ratio is not a whole number, so the leftover is carried between cycles
+	// rather than rounded away -- rounding would drift a whole scanline every
+	// few hundred instructions.
+	int m_dotNumerator;
+	int m_dotDenominator;
+	int m_dotRemainder;
+
+	// True only while the CPU is executing an instruction. Everything else that
+	// reaches this bus -- an OAM DMA copy, a DMC sample fetch, the reset vector
+	// read -- is time already accounted for somewhere else, and must not be
+	// charged twice.
+	bool m_ticking;
+	int m_accountedCycles;
+	unsigned long m_overruns;
 };
 
 /**
