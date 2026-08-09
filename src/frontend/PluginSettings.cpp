@@ -31,8 +31,9 @@ const char* PluginSettings::kindLabel(int index) {
 }
 
 PluginSettings::PluginSettings(const nesplug::Registry& registry,
-		const nesgui::Config& config) :
-		m_registry(registry), m_changed(false) {
+		const nesgui::Config& config, const nes_host* host) :
+		m_registry(registry), m_host(host), m_scale(config.scale),
+		m_fullscreen(config.fullscreen), m_changed(false) {
 
 	for (int index = 0; index < KIND_COUNT; index++) {
 		const std::vector<const nesplug::Entry*> entries =
@@ -87,6 +88,23 @@ bool PluginSettings::select(int index, int choice) {
 	return true;
 }
 
+bool PluginSettings::setScale(int scale) {
+	if (scale < MIN_SCALE || scale > MAX_SCALE)
+		return false;
+	if (m_scale != scale) {
+		m_scale = scale;
+		m_changed = true;
+	}
+	return true;
+}
+
+void PluginSettings::setFullscreen(bool fullscreen) {
+	if (m_fullscreen != fullscreen) {
+		m_fullscreen = fullscreen;
+		m_changed = true;
+	}
+}
+
 bool PluginSettings::canConfigure(int index) const {
 	const int choice = m_selected[index];
 	return choice >= 0 && m_choices[index][choice].configurable;
@@ -104,7 +122,7 @@ bool PluginSettings::configure(int index) {
 	switch (KINDS[index]) {
 	case NES_PLUGIN_VIDEO: {
 		std::unique_ptr<nesplug::VideoPlugin> plugin =
-				nesplug::createFrom<nesplug::VideoPlugin>(*entry, nullptr);
+				nesplug::createFrom<nesplug::VideoPlugin>(*entry, m_host);
 		if (!plugin)
 			return false;
 		plugin->configure();
@@ -112,7 +130,7 @@ bool PluginSettings::configure(int index) {
 	}
 	case NES_PLUGIN_AUDIO: {
 		std::unique_ptr<nesplug::AudioPlugin> plugin =
-				nesplug::createFrom<nesplug::AudioPlugin>(*entry, nullptr);
+				nesplug::createFrom<nesplug::AudioPlugin>(*entry, m_host);
 		if (!plugin)
 			return false;
 		plugin->configure();
@@ -120,7 +138,7 @@ bool PluginSettings::configure(int index) {
 	}
 	default: {
 		std::unique_ptr<nesplug::InputPlugin> plugin =
-				nesplug::createFrom<nesplug::InputPlugin>(*entry, nullptr);
+				nesplug::createFrom<nesplug::InputPlugin>(*entry, m_host);
 		if (!plugin)
 			return false;
 		plugin->configure();
@@ -133,6 +151,8 @@ void PluginSettings::apply(nesgui::Config* config) const {
 	config->videoPlugin = selectedId(0);
 	config->audioPlugin = selectedId(1);
 	config->inputPlugin = selectedId(2);
+	config->scale = m_scale;
+	config->fullscreen = m_fullscreen;
 }
 
 } // namespace nesfe

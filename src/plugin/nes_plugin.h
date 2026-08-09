@@ -99,7 +99,52 @@ typedef struct nes_host {
 
 	/** For a plugin to say something without owning a console. */
 	void (*log)(void* context, const char* message);
+
+	/**
+	 * Read one of this plugin's own settings.
+	 *
+	 * A plugin has settings the host knows nothing about -- which sound device,
+	 * how much to smooth the picture -- and nowhere of its own to keep them. It
+	 * could open a file beside itself, and then a user would have one program
+	 * with four configuration files in three formats. So the host stores them:
+	 * it already owns a file, it already knows where that file belongs on this
+	 * platform, and it is the only party that can keep the whole configuration
+	 * consistent.
+	 *
+	 * Namespaced by @p plugin_id, which the plugin passes because the host has
+	 * no way to tell which of its loaded modules is calling.
+	 *
+	 * @return the length of the value, excluding the terminator, or 0 when the
+	 *         setting has never been written. When the value does not fit,
+	 *         @p value gets as much as it holds, terminated, and the return is
+	 *         still the full length -- so a caller can tell it was truncated.
+	 */
+	size_t (*get_setting)(void* context, const char* plugin_id, const char* key,
+			char* value, size_t value_size);
+
+	/**
+	 * Write one of this plugin's own settings, and persist it.
+	 *
+	 * Persisted immediately rather than at shutdown: a setting changed in a
+	 * dialog should survive the program being killed, and nothing here is hot
+	 * enough for the write to matter.
+	 */
+	void (*set_setting)(void* context, const char* plugin_id, const char* key,
+			const char* value);
 } nes_host;
+
+/**
+ * True when @p host is present, new enough to have @p field, and offers it.
+ *
+ * The whole point of the size field, in one expression. A module built against
+ * a newer header than the host it is loaded into must ask this before calling
+ * anything added after version 1 -- the alternative is reading past the end of
+ * a struct somebody else allocated.
+ */
+#define NES_HOST_PROVIDES(host, field) \
+	((host) != NULL \
+		&& (host)->size >= offsetof(nes_host, field) + sizeof((host)->field) \
+		&& (host)->field != NULL)
 
 /* ------------------------------------------------------------------------- */
 /* Video                                                                      */

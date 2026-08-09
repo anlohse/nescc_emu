@@ -15,10 +15,12 @@
 
 #include "Backend.h"
 #include "../GuiConfig.h"
+#include "../plugin/nes_plugin.h"
 
 #include <SDL.h>
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace nesfe {
@@ -26,7 +28,11 @@ namespace nesfe {
 /** A window, a renderer and a streaming texture. */
 class SdlVideo : public VideoSink {
 public:
-	SdlVideo();
+	/**
+	 * @param host where this plugin's own settings live. Null means the
+	 *             defaults, which is what a test or a headless run wants.
+	 */
+	explicit SdlVideo(const nes_host* host = nullptr);
 	~SdlVideo();
 
 	bool open(const VideoOptions& options, Error* error) override;
@@ -46,7 +52,25 @@ public:
 	 */
 	void windowToFrame(int windowX, int windowY, int* frameX, int* frameY) const;
 
+	/**
+	 * This plugin's own settings: how the picture is drawn, and nothing else.
+	 *
+	 * Window size and fullscreen are not here. The host reads those and passes
+	 * them to whichever video plugin is loaded, so the host's own dialog is
+	 * where they are edited; a plugin writing them too would be a second author
+	 * of one setting. What is left is what only this plugin knows -- the filter
+	 * it scales with, and the shape it thinks a console pixel is.
+	 */
+	void configure();
+
+	/** The NES's pixel aspect on a television: 8:7, not square. */
+	static const int WIDE_WIDTH = 292;   // 256 * 8 / 7
+
 private:
+	std::string setting(const char* key, const char* fallback) const;
+	void putSetting(const char* key, const char* value);
+
+	const nes_host* m_host;
 	SDL_Window* m_window;
 	SDL_Renderer* m_renderer;
 	SDL_Texture* m_texture;
@@ -54,6 +78,8 @@ private:
 	std::vector<std::uint32_t> m_pixels;
 	int m_width;
 	int m_height;
+	/** What the renderer's logical width is: m_width, or WIDE_WIDTH. */
+	int m_logicalWidth;
 };
 
 /** Queued audio: no callback thread, so no locking against one. */

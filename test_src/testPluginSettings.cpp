@@ -186,10 +186,73 @@ TEST_CASE("applying_writes_the_ids_and_leaves_everything_else_alone") {
 	CHECK_EQ(config.audioPlugin, "audio-a");
 	CHECK_EQ(config.inputPlugin, "input-a");
 
-	// The rest of the configuration belongs to somebody else.
+	// The display settings are this dialog's too, and come back unchanged when
+	// nothing touched them -- not reset to the defaults, which is the bug this
+	// would be if the model had been built from anything but the live config.
 	CHECK_EQ(config.scale, 5);
 	CHECK(config.fullscreen);
+
+	// The bindings are somebody else's.
 	CHECK_EQ(config.keys[0][0], SDL_SCANCODE_Q);
+}
+
+TEST_CASE("the_display_settings_start_where_the_configuration_is") {
+	Registry registry = populated();
+	nesgui::Config config = nesgui::Config::defaults();
+	config.scale = 4;
+	config.fullscreen = true;
+
+	PluginSettings settings(registry, config);
+	CHECK_EQ(settings.scale(), 4);
+	CHECK(settings.fullscreen());
+	CHECK_FALSE(settings.changed());
+}
+
+TEST_CASE("a_scale_outside_the_range_is_refused_rather_than_clamped") {
+	// Clamping would silently turn a typed 12 into an 8 and look like it
+	// worked. The dialog only ever offers what is in range anyway, so anything
+	// out of it arrived from somewhere that should hear about it.
+	Registry registry = populated();
+	nesgui::Config config = nesgui::Config::defaults();
+	PluginSettings settings(registry, config);
+
+	CHECK_FALSE(settings.setScale(0));
+	CHECK_FALSE(settings.setScale(PluginSettings::MAX_SCALE + 1));
+	CHECK_EQ(settings.scale(), config.scale);
+	CHECK_FALSE(settings.changed());
+
+	CHECK(settings.setScale(PluginSettings::MAX_SCALE));
+	CHECK_EQ(settings.scale(), PluginSettings::MAX_SCALE);
+	CHECK(settings.changed());
+}
+
+TEST_CASE("display_settings_reach_the_configuration_only_through_apply") {
+	// Cancel means the window never happened. A dialog that wrote as the user
+	// clicked would leave a half-made change behind, which is the failure this
+	// whole split exists to make impossible.
+	Registry registry = populated();
+	nesgui::Config config = nesgui::Config::defaults();
+	config.scale = 2;
+
+	PluginSettings settings(registry, config);
+	settings.setScale(6);
+	settings.setFullscreen(true);
+	CHECK_EQ(config.scale, 2);
+	CHECK_FALSE(config.fullscreen);
+
+	settings.apply(&config);
+	CHECK_EQ(config.scale, 6);
+	CHECK(config.fullscreen);
+}
+
+TEST_CASE("setting_the_same_display_values_again_is_not_a_change") {
+	Registry registry = populated();
+	nesgui::Config config = nesgui::Config::defaults();
+
+	PluginSettings settings(registry, config);
+	CHECK(settings.setScale(config.scale));
+	settings.setFullscreen(config.fullscreen);
+	CHECK_FALSE(settings.changed());
 }
 
 TEST_CASE("a_kind_with_nothing_installed_applies_as_empty_not_as_stale") {

@@ -56,6 +56,18 @@ void warn(std::string* warnings, const std::string& message) {
 
 } // namespace
 
+std::string Config::pluginSetting(const std::string& id, const std::string& key,
+		const std::string& fallback) const {
+	const std::map<std::string, std::string>::const_iterator found =
+			pluginSettings.find(lower(id) + "." + lower(key));
+	return found == pluginSettings.end() ? fallback : found->second;
+}
+
+void Config::setPluginSetting(const std::string& id, const std::string& key,
+		const std::string& value) {
+	pluginSettings[lower(id) + "." + lower(key)] = value;
+}
+
 Config Config::defaults() {
 	Config c;
 
@@ -162,6 +174,19 @@ bool Config::load(const std::string& file, std::string* warnings) {
 			continue;
 		}
 
+		// A plugin's own settings. Nothing here is checked against a list of
+		// known keys, because there is no such list: the plugin that wrote a
+		// key is the only thing that knows what it means, and it may not even
+		// be installed on the machine reading this file.
+		if (section.rfind("plugin.", 0) == 0) {
+			const std::string id = section.substr(7);
+			if (id.empty())
+				warn(warnings, where + "a [plugin.<id>] section needs an id");
+			else
+				pluginSettings[id + "." + key] = value;
+			continue;
+		}
+
 		const bool isKeyboard = (section == "keyboard1" || section == "keyboard2");
 		const bool isPad = (section == "pad1" || section == "pad2");
 		if (!isKeyboard && !isPad) {
@@ -237,6 +262,29 @@ bool Config::save(const std::string& file) const {
 		for (int i = 0; i < 8; i++) {
 			const char* name = SDL_GetScancodeName(keys[port][i]);
 			os << BUTTON_NAMES[i] << " = " << (name && *name ? name : "") << "\n";
+		}
+		os << "\n";
+	}
+
+	if (!pluginSettings.empty()) {
+		os << "# Settings belonging to plugins. What these mean is the plugin's\n"
+		   << "# business, not this program's -- they are kept here so there is one\n"
+		   << "# configuration file rather than one per module.\n";
+		std::string current;
+		for (std::map<std::string, std::string>::const_iterator it =
+				pluginSettings.begin(); it != pluginSettings.end(); ++it) {
+			// The map is sorted, so every key of one plugin arrives together
+			// and the section header only has to be written when the id turns
+			// over. Splitting on the first dot: an id has none, a key may.
+			const std::size_t dot = it->first.find('.');
+			if (dot == std::string::npos)
+				continue;
+			const std::string id = it->first.substr(0, dot);
+			if (id != current) {
+				os << "\n[plugin." << id << "]\n";
+				current = id;
+			}
+			os << it->first.substr(dot + 1) << " = " << it->second << "\n";
 		}
 		os << "\n";
 	}

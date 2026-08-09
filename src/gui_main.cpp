@@ -9,6 +9,7 @@
 
 #include "GuiConfig.h"
 #include "frontend/App.h"
+#include "frontend/HostServices.h"
 #include "frontend/SdlBackend.h"
 #include "frontend/PluginSettings.h"
 #include "frontend/SdlPlugin.h"
@@ -183,7 +184,11 @@ int main(int argc, char* argv[]) {
 		std::vector<std::shared_ptr<nesplug::Module> > modules;
 		buildRegistry(&registry, &modules, pluginDirectory());
 
-		nesfe::PluginSettings settings(registry, config);
+		// A plugin's own dialog needs somewhere to put what it decides, which
+		// is the host: it owns the file. Without this, opening one from here
+		// would show settings that could not be saved.
+		nesfe::HostServices host(&config, configPath);
+		nesfe::PluginSettings settings(registry, config, host.handle());
 		const bool accepted = nesfe::showSettingsDialog(&settings, nullptr);
 		if (accepted) {
 			settings.apply(&config);
@@ -242,8 +247,18 @@ int main(int argc, char* argv[]) {
 		return 1;
 	}
 
+	// Declared before any plugin and destroyed after all of them: a plugin is
+	// entitled to call back through this pointer whenever it likes, so it must
+	// not be the shorter-lived of the two.
+	nesfe::HostServices host(&config, configPath);
+	host.setFrameSource([&console](int* width, int* height) {
+		if (width) *width = nes::Ppu::SCREEN_WIDTH;
+		if (height) *height = nes::Ppu::SCREEN_HEIGHT;
+		return console.ppu().framebuffer();
+	});
+
 	std::unique_ptr<nesplug::VideoPlugin> videoOwner =
-			nesplug::createFrom<nesplug::VideoPlugin>(*videoEntry, nullptr);
+			nesplug::createFrom<nesplug::VideoPlugin>(*videoEntry, host.handle());
 	if (!videoOwner) {
 		std::fprintf(stderr, "video plugin could not be created\n");
 		SDL_Quit();
@@ -260,10 +275,13 @@ int main(int argc, char* argv[]) {
 	}
 	SDL_Log("video plugin: %s", videoEntry->info->name);
 
+	// Only now is there a window for a plugin's dialog to sit over.
+	host.setWindowSource([&video]() { return video.nativeWindow(); });
+
 	nesfe::App::Options appOptions;
 	std::unique_ptr<nesplug::AudioPlugin> audioOwner;
 	if (audioEntry)
-		audioOwner = nesplug::createFrom<nesplug::AudioPlugin>(*audioEntry, nullptr);
+		audioOwner = nesplug::createFrom<nesplug::AudioPlugin>(*audioEntry, host.handle());
 	if (!audioOwner) {
 		// No audio plugin at all is a quiet emulator, not a broken one. The
 		// adapter tolerates a null api, so the run loop needs no special case.
@@ -276,7 +294,7 @@ int main(int argc, char* argv[]) {
 		SDL_Log("audio plugin: %s", audioEntry->info->name);
 
 	std::unique_ptr<nesplug::InputPlugin> inputOwner =
-			nesplug::createFrom<nesplug::InputPlugin>(*inputEntry, nullptr);
+			nesplug::createFrom<nesplug::InputPlugin>(*inputEntry, host.handle());
 	if (!inputOwner) {
 		std::fprintf(stderr, "input plugin could not be created\n");
 		SDL_Quit();
@@ -309,7 +327,7 @@ int main(int argc, char* argv[]) {
 					configPath.c_str());
 			return;
 		}
-		nesfe::PluginSettings settings(registry, config);
+		nesfe::PluginSettings settings(registry, config, host.handle());
 		if (!nesfe::showSettingsDialog(&settings, video.nativeWindow()))
 			return;
 		settings.apply(&config);

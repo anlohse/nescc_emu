@@ -43,7 +43,32 @@ struct PluginChoice {
  */
 class PluginSettings {
 public:
-	PluginSettings(const nesplug::Registry& registry, const nesgui::Config& config);
+	/**
+	 * @param host what a plugin's own dialog gets to ask of the program. Null
+	 *             is allowed and means a plugin opening its dialog has nowhere
+	 *             to store what it decides, which is why the emulator always
+	 *             passes one and only the tests leave it out.
+	 */
+	PluginSettings(const nesplug::Registry& registry, const nesgui::Config& config,
+			const nes_host* host = nullptr);
+
+	/* --- Display -------------------------------------------------------- */
+	/*
+	 * Not a plugin's business, despite living in the same dialog. The host
+	 * reads these and passes them to whichever video plugin is loaded, so the
+	 * host is where they are edited -- a plugin that also wrote them would be a
+	 * second author of one setting, and the two would disagree the first time
+	 * somebody used the command line.
+	 */
+	static const int MIN_SCALE = 1;
+	static const int MAX_SCALE = 8;
+
+	int scale() const { return m_scale; }
+	/** @return false when @p scale is outside MIN_SCALE..MAX_SCALE. */
+	bool setScale(int scale);
+
+	bool fullscreen() const { return m_fullscreen; }
+	void setFullscreen(bool fullscreen);
 
 	static const int KIND_COUNT = 3;
 	/** Index 0, 1, 2 in the order a dialog should show them. */
@@ -78,17 +103,20 @@ public:
 	bool changed() const { return m_changed; }
 
 	/**
-	 * Write the selections into @p config.
+	 * Write the selections and the display settings into @p config.
 	 *
-	 * Only the plugin ids -- everything else in the configuration belongs to
-	 * somebody else and is left alone.
+	 * Nothing else: the bindings, and every plugin's own settings, belong to
+	 * somebody else and are left exactly as they were found.
 	 */
 	void apply(nesgui::Config* config) const;
 
 private:
 	const nesplug::Registry& m_registry;
+	const nes_host* m_host;
 	std::vector<PluginChoice> m_choices[KIND_COUNT];
 	int m_selected[KIND_COUNT];
+	int m_scale;
+	bool m_fullscreen;
 	bool m_changed;
 };
 

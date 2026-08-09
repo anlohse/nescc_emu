@@ -146,8 +146,36 @@ knowing before reading the header:
    keys producing no character need a table. A key SDL cannot name is refused out loud
    rather than guessed at.
 
-   Still to come: `configure()` for video and audio. Both are still built in, and their
-   Settings buttons in the chooser are correctly disabled.
+   ~~Still to come: `configure()` for video and audio.~~ Done, and it needed something
+   built first. The audio plugin people actually run is `audio_sdl.dll`, which links
+   against SDL and nothing else — no `nes_lib`, no `GuiConfig` — so it cannot read or
+   write `nes.cfg`, and a dialog on the built-in copy would have been a dialog on the
+   copy that gets shadowed. A plugin needed somewhere to keep its settings.
+
+   The answer is that the host keeps them. `nes_host` grew `get_setting` and
+   `set_setting`, namespaced by plugin id, persisted into `[plugin.<id>]` sections of
+   the one configuration file the program already owns. A plugin opening a file beside
+   itself instead is how a program ends up with four configuration files in three
+   formats. Settings belonging to a plugin that is not installed on this machine
+   survive the round trip, because losing them silently is how a config file stops
+   being trusted. This also made `nes_host` real: it was being passed as null
+   everywhere until something needed it.
+
+   **Who owns a setting turned out to be the whole design question.** Window scale and
+   fullscreen look like video settings and are not: the host reads them and passes them
+   to whichever video plugin is loaded, so the host's chooser is where they are edited
+   and the chooser grew a Window row for them. What the video plugin owns is what only
+   it knows — the scaling filter, and whether a console pixel is square or the 8:7 a
+   television actually showed. Audio owns its device, its volume and its buffer size.
+   Two authors for one setting is how a command line and a dialog end up disagreeing.
+
+   The dialogs are three combo boxes and an OK, twice, which would have been the third
+   and fourth copy of the same eighty lines of Win32 — so those live in
+   `plugin/FieldsDialog.h`, header-only, because a plugin links nothing of the host's
+   and anything shared with it has to be shareable without a library. It registers its
+   window class per module rather than per process: two modules using the same header
+   must not be handed each other's window procedure, which is visible in the running
+   program as two class names, `nesFieldsDialog<host>` and `nesFieldsDialog<dll>`.
 4. ~~**The Zapper**, as a second controller plugin. The proof the architecture holds.~~
    Done, and the architecture held: what the ABI grew is two functions on the end of
    two existing structs — `poll_zapper` on the input api, `window_to_frame` on the

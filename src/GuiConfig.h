@@ -3,6 +3,7 @@
 
 #include <SDL.h>
 
+#include <map>
 #include <string>
 
 namespace nesgui {
@@ -35,6 +36,25 @@ struct Config {
 	std::string videoPlugin;
 	std::string audioPlugin;
 	std::string inputPlugin;
+
+	/**
+	 * Settings belonging to plugins, keyed "<plugin id>.<key>".
+	 *
+	 * The host does not know what any of these mean and does not try to: a
+	 * value is whatever text the plugin wrote. They are kept here so that a
+	 * program with plugins still has one configuration file rather than one per
+	 * module, and they survive a load-and-save round trip even when the plugin
+	 * that wrote them is not installed on this machine. Losing another
+	 * program's settings because it happened not to be present is the kind of
+	 * thing that makes people stop trusting a config file.
+	 */
+	std::map<std::string, std::string> pluginSettings;
+
+	/** @return the stored value, or @p fallback when there is none. */
+	std::string pluginSetting(const std::string& id, const std::string& key,
+			const std::string& fallback = std::string()) const;
+	void setPluginSetting(const std::string& id, const std::string& key,
+			const std::string& value);
 
 	/** The defaults, which are also what gets written on a first run. */
 	static Config defaults();
