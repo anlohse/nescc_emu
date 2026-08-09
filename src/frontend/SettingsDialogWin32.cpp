@@ -24,6 +24,8 @@ namespace {
 
 const int ID_FIRST_COMBO     = 1000;   // + kind index
 const int ID_FIRST_CONFIGURE = 1010;   // + kind index
+const int ID_SCALE           = 1020;
+const int ID_FULLSCREEN      = 1021;
 const int ID_OK              = 1;
 const int ID_CANCEL          = 2;
 
@@ -43,6 +45,8 @@ struct DialogState {
 	PluginSettings* settings;
 	HWND combo[PluginSettings::KIND_COUNT];
 	HWND configure[PluginSettings::KIND_COUNT];
+	HWND scale;
+	HWND fullscreen;
 	bool accepted;
 };
 
@@ -103,6 +107,19 @@ LRESULT CALLBACK dialogProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
 			return 0;
 		}
 
+		if (id == ID_SCALE) {
+			if (HIWORD(wParam) == CBN_SELCHANGE)
+				state->settings->setScale(PluginSettings::MIN_SCALE
+						+ static_cast<int>(
+								SendMessage(state->scale, CB_GETCURSEL, 0, 0)));
+			return 0;
+		}
+		if (id == ID_FULLSCREEN) {
+			state->settings->setFullscreen(
+					SendMessage(state->fullscreen, BM_GETCHECK, 0, 0) == BST_CHECKED);
+			return 0;
+		}
+
 		if (id == ID_OK) {
 			state->accepted = true;
 			DestroyWindow(window);
@@ -157,7 +174,12 @@ bool showSettingsDialog(PluginSettings* settings, void* parent) {
 		registered = true;
 	}
 
-	const int rowsBottom = MARGIN + PluginSettings::KIND_COUNT * ROW_HEIGHT;
+	// One row per job, then one for the window itself. Scale and fullscreen are
+	// the host's settings rather than any plugin's -- the host reads them and
+	// hands them to whichever video plugin is loaded -- so this is where they
+	// belong, next to the choice of plugin rather than inside one.
+	const int displayY   = MARGIN + PluginSettings::KIND_COUNT * ROW_HEIGHT;
+	const int rowsBottom = displayY + ROW_HEIGHT;
 	const int noteY      = rowsBottom + 6;
 	const int buttonsY   = rowsBottom + 34;
 	const int clientHeight = buttonsY + 26 + MARGIN;
@@ -213,8 +235,20 @@ bool showSettingsDialog(PluginSettings* settings, void* parent) {
 		y += ROW_HEIGHT;
 	}
 
+	CreateWindowExA(0, "STATIC", "Window",
+			WS_CHILD | WS_VISIBLE, MARGIN, displayY + 5, LABEL_WIDTH, 20,
+			window, nullptr, instance, nullptr);
+	state.scale = CreateWindowExA(0, "COMBOBOX", "",
+			WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL,
+			comboX, displayY, 96, 240,
+			window, reinterpret_cast<HMENU>(ID_SCALE), instance, nullptr);
+	state.fullscreen = CreateWindowExA(0, "BUTTON", "Full screen",
+			WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+			comboX + 108, displayY + 3, 120, 20,
+			window, reinterpret_cast<HMENU>(ID_FULLSCREEN), instance, nullptr);
+
 	CreateWindowExA(0, "STATIC",
-			"A change of plugin takes effect the next time the emulator starts.",
+			"Changes take effect the next time the emulator starts.",
 			WS_CHILD | WS_VISIBLE, MARGIN, noteY, CLIENT_WIDTH - 2 * MARGIN, 20,
 			window, nullptr, instance, nullptr);
 
@@ -236,6 +270,16 @@ bool showSettingsDialog(PluginSettings* settings, void* parent) {
 
 	for (int index = 0; index < PluginSettings::KIND_COUNT; index++)
 		fillCombo(&state, index);
+
+	for (int n = PluginSettings::MIN_SCALE; n <= PluginSettings::MAX_SCALE; n++) {
+		char label[32];
+		wsprintfA(label, "%dx  (%d x %d)", n, 256 * n, 240 * n);
+		SendMessageA(state.scale, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label));
+	}
+	SendMessage(state.scale, CB_SETCURSEL,
+			static_cast<WPARAM>(settings->scale() - PluginSettings::MIN_SCALE), 0);
+	SendMessage(state.fullscreen, BM_SETCHECK,
+			settings->fullscreen() ? BST_CHECKED : BST_UNCHECKED, 0);
 
 	if (parent)
 		EnableWindow(static_cast<HWND>(parent), FALSE);   // modal, by hand

@@ -13,17 +13,31 @@
 //
 
 #include "../../plugin/nes_plugin.h"
+#include "../../plugin/FieldsDialog.h"
 
 #include <SDL.h>
 
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <new>
+#include <string>
+#include <vector>
 
 namespace {
 
+/** This plugin's id, and so the name its settings are filed under. */
+const char* const PLUGIN_ID = "sdl-audio";
+
+/** The buffer sizes offered, in samples. Powers of two, as a device wants. */
+const int BUFFER_SIZES[] = { 256, 512, 1024, 2048, 4096 };
+const int BUFFER_COUNT = 5;
+
 class SdlAudioDevice {
 public:
-	SdlAudioDevice() : m_device(0), m_sampleRate(0), m_ownsSubsystem(false) { }
+	explicit SdlAudioDevice(const nes_host* host) :
+			m_host(host), m_device(0), m_sampleRate(0), m_volume(100),
+			m_ownsSubsystem(false) { }
 
 	~SdlAudioDevice() { close(); }
 
@@ -39,16 +53,31 @@ public:
 			m_ownsSubsystem = true;
 		}
 
+		// The settings this plugin owns, asked for at the moment they are
+		// needed rather than in the constructor: a dialog may have changed them
+		// since the program started.
+		m_volume = clampVolume(std::atoi(setting("volume", "100").c_str()));
+		const int buffer = validBuffer(std::atoi(setting("buffer", "1024").c_str()));
+		const std::string device = setting("device", "");
+
 		SDL_AudioSpec want;
 		SDL_zero(want);
 		want.freq = sampleRate;
 		want.format = AUDIO_F32SYS;
 		want.channels = 1;         // the NES mixes to one signal
-		want.samples = 1024;
+		want.samples = static_cast<Uint16>(buffer);
 		want.callback = nullptr;   // queued, so no callback thread to lock against
 
 		SDL_AudioSpec got;
-		m_device = SDL_OpenAudioDevice(nullptr, 0, &want, &got, 0);
+		// An empty name means whatever the system calls default. So does a name
+		// that is no longer there: a pair of headphones being unplugged between
+		// two runs should cost the setting, not the sound.
+		m_device = SDL_OpenAudioDevice(device.empty() ? nullptr : device.c_str(),
+				0, &want, &got, 0);
+		if (m_device == 0 && !device.empty()) {
+			log("the chosen audio device is not available; using the default");
+			m_device = SDL_OpenAudioDevice(nullptr, 0, &want, &got, 0);
+		}
 		if (m_device == 0) {
 			setError(error, errorSize, SDL_GetError());
 			releaseSubsystem();
@@ -70,9 +99,98 @@ public:
 	bool isOpen() const { return m_device != 0; }
 
 	void queue(const float* samples, std::size_t count) {
-		if (m_device)
+		if (!m_device)
+			return;
+		if (m_volume >= 100) {
 			SDL_QueueAudio(m_device, samples,
 					static_cast<Uint32>(count * sizeof(float)));
+			return;
+		}
+		// Scaled into a buffer of this plugin's own: the samples belong to the
+		// host and are not ours to write over. Linear rather than logarithmic
+		// deliberately -- this is a trim against the rest of the desktop, and
+		// the system volume control is still the loudness knob people reach
+		// for.
+		const float gain = m_volume / 100.0f;
+		m_scaled.resize(count);
+		for (std::size_t i = 0; i < count; i++)
+			m_scaled[i] = samples[i] * gain;
+		SDL_QueueAudio(m_device, m_scaled.data(),
+				static_cast<Uint32>(count * sizeof(float)));
+	}
+
+	/** This plugin's own settings: the device, how loud, and how much latency. */
+	void configure() {
+		if (!nesdlg::fieldsDialogAvailable()) {
+			log("no audio settings dialog on this platform yet");
+			return;
+		}
+
+		// Device names come from SDL, which needs its audio subsystem up. A
+		// dialog is usually opened on a throwaway instance that has opened
+		// nothing, so bring it up for as long as this takes and put it back.
+		const bool startedHere = !SDL_WasInit(SDL_INIT_AUDIO)
+				&& SDL_InitSubSystem(SDL_INIT_AUDIO) == 0;
+
+		std::vector<nesdlg::Field> fields(3);
+		std::vector<std::string> deviceNames;
+
+		fields[0].label = "Output";
+		fields[0].options.push_back("System default");
+		deviceNames.push_back("");
+		const std::string current = setting("device", "");
+		const int devices = SDL_GetNumAudioDevices(0);
+		for (int i = 0; i < devices; i++) {
+			const char* name = SDL_GetAudioDeviceName(i, 0);
+			if (!name)
+				continue;
+			deviceNames.push_back(name);
+			fields[0].options.push_back(name);
+			if (current == name)
+				fields[0].selected = static_cast<int>(deviceNames.size()) - 1;
+		}
+
+		fields[1].label = "Volume";
+		const int volume = clampVolume(std::atoi(setting("volume", "100").c_str()));
+		for (int percent = 100; percent >= 0; percent -= 10) {
+			char label[32];
+			std::snprintf(label, sizeof(label), "%d%%", percent);
+			fields[1].options.push_back(label);
+			if (percent == roundToTen(volume))
+				fields[1].selected = (100 - percent) / 10;
+		}
+
+		fields[2].label = "Buffer";
+		const int buffer = validBuffer(std::atoi(setting("buffer", "1024").c_str()));
+		for (int i = 0; i < BUFFER_COUNT; i++) {
+			// Milliseconds are the number that means something to a player; the
+			// sample count is only how a device has to be asked.
+			char label[64];
+			std::snprintf(label, sizeof(label), "%d samples  (about %d ms)",
+					BUFFER_SIZES[i], BUFFER_SIZES[i] * 1000 / 44100);
+			fields[2].options.push_back(label);
+			if (BUFFER_SIZES[i] == buffer)
+				fields[2].selected = i;
+		}
+
+		void* parent = NULL;
+		if (NES_HOST_PROVIDES(m_host, window_handle))
+			parent = m_host->window_handle(m_host->context);
+
+		const bool accepted = nesdlg::showFieldsDialog("SDL2 audio", parent,
+				&fields, "Takes effect the next time the emulator starts.");
+
+		if (startedHere)
+			SDL_QuitSubSystem(SDL_INIT_AUDIO);
+		if (!accepted)
+			return;
+
+		putSetting("device", deviceNames[fields[0].selected].c_str());
+		char value[16];
+		std::snprintf(value, sizeof(value), "%d", 100 - fields[1].selected * 10);
+		putSetting("volume", value);
+		std::snprintf(value, sizeof(value), "%d", BUFFER_SIZES[fields[2].selected]);
+		putSetting("buffer", value);
 	}
 
 	double queuedSeconds() const {
@@ -95,6 +213,52 @@ private:
 		error[size - 1] = '\0';
 	}
 
+	static int clampVolume(int volume) {
+		if (volume < 0) return 0;
+		if (volume > 100) return 100;
+		return volume;
+	}
+
+	static int roundToTen(int volume) {
+		return ((volume + 5) / 10) * 10;
+	}
+
+	/** The nearest size offered, so a hand-edited file cannot ask for three. */
+	static int validBuffer(int samples) {
+		for (int i = 0; i < BUFFER_COUNT; i++)
+			if (BUFFER_SIZES[i] == samples)
+				return samples;
+		return 1024;
+	}
+
+	/*
+	 * Settings live with the host. This plugin has nowhere of its own to keep
+	 * them, and should not invent one: a program with four configuration files
+	 * in three formats is what that leads to.
+	 */
+	std::string setting(const char* key, const char* fallback) const {
+		if (!NES_HOST_PROVIDES(m_host, get_setting))
+			return fallback;
+		char value[256] = { 0 };
+		const size_t length = m_host->get_setting(m_host->context, PLUGIN_ID,
+				key, value, sizeof(value));
+		if (length == 0 || length >= sizeof(value))
+			return fallback;
+		return value;
+	}
+
+	void putSetting(const char* key, const char* value) {
+		if (NES_HOST_PROVIDES(m_host, set_setting))
+			m_host->set_setting(m_host->context, PLUGIN_ID, key, value);
+	}
+
+	void log(const char* message) {
+		if (NES_HOST_PROVIDES(m_host, log))
+			m_host->log(m_host->context, message);
+		else
+			SDL_Log("%s", message);
+	}
+
 	/** Only quit what we started. The host may still be using its own. */
 	void releaseSubsystem() {
 		if (m_ownsSubsystem) {
@@ -103,8 +267,11 @@ private:
 		}
 	}
 
+	const nes_host* m_host;
 	SDL_AudioDeviceID m_device;
 	int m_sampleRate;
+	int m_volume;
+	std::vector<float> m_scaled;
 	bool m_ownsSubsystem;
 };
 
@@ -112,10 +279,10 @@ private:
 /* The C surface                                                              */
 /* ------------------------------------------------------------------------- */
 
-void* audioCreate(const nes_host* /*host*/) {
+void* audioCreate(const nes_host* host) {
 	// nothrow: an exception escaping into the host's C frame is undefined, and
 	// there is nothing useful to do with a bad_alloc here anyway.
-	return new (std::nothrow) SdlAudioDevice();
+	return new (std::nothrow) SdlAudioDevice(host);
 }
 
 void audioDestroy(void* self) {
@@ -146,6 +313,14 @@ void audioClear(void* self) {
 	static_cast<SdlAudioDevice*>(self)->clear();
 }
 
+void audioConfigure(void* self) {
+	// Nothing may be thrown back across the boundary, and there is nothing to
+	// report either: a settings dialog that failed changed no settings.
+	try {
+		static_cast<SdlAudioDevice*>(self)->configure();
+	} catch (...) { }
+}
+
 const nes_audio_api AUDIO_API = {
 	sizeof(nes_audio_api),
 	audioCreate,
@@ -156,7 +331,7 @@ const nes_audio_api AUDIO_API = {
 	audioQueue,
 	audioQueuedSeconds,
 	audioClear,
-	nullptr        // no settings dialog yet
+	audioConfigure
 };
 
 const nes_plugin_info AUDIO_INFO = {

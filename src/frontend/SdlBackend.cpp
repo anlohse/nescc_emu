@@ -1,6 +1,7 @@
 #include "SdlBackend.h"
 
 #include "BindingsDialog.h"
+#include "../plugin/FieldsDialog.h"
 
 #include <SDL_syswm.h>
 
@@ -56,9 +57,9 @@ SDL_JoystickID instanceId(SDL_GameController* pad) {
 /* Video                                                                      */
 /* ------------------------------------------------------------------------- */
 
-SdlVideo::SdlVideo() :
-		m_window(nullptr), m_renderer(nullptr), m_texture(nullptr),
-		m_width(0), m_height(0) {
+SdlVideo::SdlVideo(const nes_host* host) :
+		m_host(host), m_window(nullptr), m_renderer(nullptr), m_texture(nullptr),
+		m_width(0), m_height(0), m_logicalWidth(0) {
 	// The console's fixed palette, pre-expanded with an opaque alpha.
 	const std::uint32_t* rgb = nes::Ppu::nesPaletteRgb();
 	for (int i = 0; i < 64; i++)
@@ -96,10 +97,15 @@ bool SdlVideo::open(const VideoOptions& options, Error* error) {
 		return false;
 	}
 
-	// Letterbox to the NES's aspect at whatever size the window is dragged to,
-	// and keep the scaling crisp -- these are 8x8 tiles, not photographs.
-	SDL_RenderSetLogicalSize(m_renderer, m_width, m_height);
-	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
+	// Letterbox at whatever size the window is dragged to. Which aspect that is
+	// is a real choice: the console's pixels were not square on a television,
+	// so a circle drawn in a game is an ellipse at 256x240 and a circle at
+	// 292x240. Sharpness is a choice too -- these are 8x8 tiles, not
+	// photographs, and most people want to see them.
+	m_logicalWidth = (setting("aspect", "square") == "tv") ? WIDE_WIDTH : m_width;
+	SDL_RenderSetLogicalSize(m_renderer, m_logicalWidth, m_height);
+	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY,
+			setting("filter", "sharp") == "smooth" ? "linear" : "nearest");
 
 	m_texture = SDL_CreateTexture(m_renderer, SDL_PIXELFORMAT_ARGB8888,
 			SDL_TEXTUREACCESS_STREAMING, m_width, m_height);
@@ -168,7 +174,14 @@ void SdlVideo::windowToFrame(int windowX, int windowY, int* frameX, int* frameY)
 	float logicalY = 0.0f;
 	SDL_RenderWindowToLogical(m_renderer, windowX, windowY, &logicalX, &logicalY);
 
-	const int x = static_cast<int>(logicalX);
+	// Logical units are not console pixels when the picture is stretched to the
+	// television's aspect: the renderer is working in a 292-wide space and the
+	// framebuffer is 256 wide. A light gun asking where it is pointed wants the
+	// pixel, so undo the stretch rather than reporting a column that does not
+	// exist.
+	const int x = (m_logicalWidth > 0 && m_logicalWidth != m_width)
+			? static_cast<int>(logicalX) * m_width / m_logicalWidth
+			: static_cast<int>(logicalX);
 	const int y = static_cast<int>(logicalY);
 	// Outside the picture is a real answer here, not a failure: the player is
 	// pointing the gun at the letterbox, or off the television entirely.
@@ -176,6 +189,54 @@ void SdlVideo::windowToFrame(int windowX, int windowY, int* frameX, int* frameY)
 		return;
 	*frameX = x;
 	*frameY = y;
+}
+
+std::string SdlVideo::setting(const char* key, const char* fallback) const {
+	if (!NES_HOST_PROVIDES(m_host, get_setting))
+		return fallback;
+	char value[64] = { 0 };
+	const std::size_t length = m_host->get_setting(m_host->context, "sdl-video",
+			key, value, sizeof(value));
+	if (length == 0 || length >= sizeof(value))
+		return fallback;   // never written, or too long to be one of ours
+	return value;
+}
+
+void SdlVideo::putSetting(const char* key, const char* value) {
+	if (NES_HOST_PROVIDES(m_host, set_setting))
+		m_host->set_setting(m_host->context, "sdl-video", key, value);
+}
+
+void SdlVideo::configure() {
+	if (!nesdlg::fieldsDialogAvailable()) {
+		SDL_Log("no video settings dialog on this platform yet");
+		return;
+	}
+
+	std::vector<nesdlg::Field> fields(2);
+	fields[0].label = "Scaling";
+	fields[0].options.push_back("Sharp  (nearest neighbour)");
+	fields[0].options.push_back("Smooth  (linear)");
+	fields[0].selected = (setting("filter", "sharp") == "smooth") ? 1 : 0;
+
+	fields[1].label = "Pixel shape";
+	fields[1].options.push_back("Square  (256 x 240)");
+	fields[1].options.push_back("As a television showed it  (8:7)");
+	fields[1].selected = (setting("aspect", "square") == "tv") ? 1 : 0;
+
+	// Parented to the emulator's window when there is one. This dialog is
+	// usually opened from a throwaway instance that has no window of its own,
+	// so the handle has to come from the host rather than from m_window.
+	void* parent = nullptr;
+	if (NES_HOST_PROVIDES(m_host, window_handle))
+		parent = m_host->window_handle(m_host->context);
+
+	if (!nesdlg::showFieldsDialog("SDL2 video", parent, &fields,
+			"Takes effect the next time the emulator starts."))
+		return;
+
+	putSetting("filter", fields[0].selected == 1 ? "smooth" : "sharp");
+	putSetting("aspect", fields[1].selected == 1 ? "tv" : "square");
 }
 
 void SdlVideo::setTitle(const char* title) {

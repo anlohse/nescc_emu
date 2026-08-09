@@ -38,8 +38,10 @@ that keeps the status bar fixed while the level moves beneath it all work.
 | Backends | video, audio, input and clock behind interfaces; SDL is one implementation |
 | Plugin ABI | C boundary with a version handshake; the SDL backends already go through it |
 | Loadable plugins | `plugins/audio_sdl` is a real shared library; a module shadows the built-in of the same id |
-| Plugin chooser | `F1`, or `--settings` with no ROM: pick a plugin per job, saved to `nes.cfg` |
+| Plugin chooser | `F1`, or `--settings` with no ROM: pick a plugin per job and the window size, saved to `nes.cfg` |
 | Rebinding | the controller plugin's own dialog: press Bind, then press the key or pad button |
+| Plugin settings | each plugin's own dialog — video's filter and pixel shape, audio's device, volume and buffer |
+| Host services | plugins read the frame, the window handle and their own settings through `nes_host` |
 | Window | `nes_gui`: SDL2 video and audio, keyboard, paced to NTSC's 60.0988 Hz |
 | Headless runner | `nes_run`: tracing, scripted input, PPM screenshots, WAV capture |
 
@@ -52,9 +54,12 @@ src/             Cartridge (iNES), Mapper (seven boards), Ppu, Apu, Controller,
 src/plugin/      nes_plugin.h -- the C plugin ABI: version, descriptor, api structs
                  PluginHost   -- registry, version handshake, C-to-C++ adapters
                  Module       -- LoadLibrary/dlopen behind RAII, typed creation
+                 FieldsDialog -- header-only, so a plugin can put up a dialog
+                                 without linking anything of the host's
 src/plugins/     audio_sdl -- the first backend to leave the executable
 src/frontend/    Backend.h  -- video, audio, input and clock as abstract classes
                  App.cpp    -- the run loop, written against those and nothing else
+                 HostServices -- the host answering nes_host: frame, window, settings
                  SdlBackend -- one SDL implementation of each
                  SdlPlugin  -- those, exported through the C ABI
                  gui_main.cpp is now only wiring: parse, init, select, run
@@ -82,6 +87,21 @@ sound. Video and input are still compiled in, for a reason worth knowing --
 The host owns the window and the event pump. That is not an accident of this
 implementation: one platform event queue carries window, keyboard and pad events
 together, so two separately loaded modules cannot both own it.
+
+Traffic runs the other way too. `nes_host` is what a plugin may ask of the program:
+the frame currently on screen, the window handle to hang a dialog on, and its own
+settings. That last one is why a plugin has no configuration file of its own — the
+host already owns one, already knows where it belongs on this platform, and is the
+only party that can keep the whole thing consistent. A plugin's settings land in a
+`[plugin.<id>]` section of `nes.cfg` and survive a load-and-save round trip even on a
+machine where that plugin is not installed, because losing another program's settings
+is how a config file stops being trusted.
+
+Which settings belong to whom is a real line rather than a tidy one. Window scale and
+fullscreen are the *host's*: it reads them and hands them to whichever video plugin is
+loaded, so they are edited in the host's own chooser. The filter and the pixel shape
+are the *video plugin's*, because nothing else knows how it draws. Two authors for one
+setting is how a command line and a dialog end up disagreeing.
 
 The lifetime rule is the other thing to know before writing a plugin. An instance
 keeps its library mapped, because every function it calls lives inside that library;
@@ -173,6 +193,13 @@ Names are SDL's own — `Right Shift`, `Keypad 8`, `dpup`, `leftshoulder` — be
 converts both directions, so the names it writes are exactly the names it reads back.
 A binding it does not recognise is reported and skipped rather than rejecting the file:
 one typo costs that binding, not the rest of your setup.
+
+`F1` opens the chooser, which also sets the window size, and every plugin's Settings
+button opens that plugin's own dialog: the filter and pixel shape for video, the output
+device, volume and buffer size for audio. All of it takes effect the next time the
+emulator starts — swapping a video plugin or reopening a sound device under a running
+console would mean tearing down the window and the event queue the dialog is itself
+running on.
 
 Or press `F1` and open the controller plugin's own dialog, where a binding is set by
 pressing the key or gamepad button you want it on. Anything else in the same group that

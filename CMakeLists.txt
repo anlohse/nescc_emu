@@ -96,6 +96,7 @@ if(NES_BUILD_GUI)
         src/gui_main.cpp
         src/GuiConfig.cpp
         src/frontend/App.cpp
+        src/frontend/HostServices.cpp
         src/frontend/SdlBackend.cpp
         src/frontend/SdlPlugin.cpp
         src/frontend/PluginSettings.cpp
@@ -210,8 +211,10 @@ if(NES_BUILD_GUI AND NES_BUILD_TESTS)
         test_src/testPlugin.cpp
         test_src/testPluginSettings.cpp
         test_src/testBindingModel.cpp
+        test_src/testHostServices.cpp
         src/GuiConfig.cpp
         src/frontend/App.cpp
+        src/frontend/HostServices.cpp
         src/frontend/PluginSettings.cpp
         src/frontend/BindingModel.cpp
         src/frontend/BindingsDialogWin32.cpp

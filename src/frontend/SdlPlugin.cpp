@@ -33,8 +33,8 @@ void setError(char* error, std::size_t size, const char* text) {
 /* Video                                                                      */
 /* ------------------------------------------------------------------------- */
 
-void* videoCreate(const nes_host* /*host*/) {
-	return new (std::nothrow) nesfe::SdlVideo();
+void* videoCreate(const nes_host* host) {
+	return new (std::nothrow) nesfe::SdlVideo(host);
 }
 
 void videoDestroy(void* self) {
@@ -83,6 +83,15 @@ void* videoNativeWindow(void* self) {
 	return static_cast<nesfe::SdlVideo*>(self)->nativeWindow();
 }
 
+void videoConfigure(void* self) {
+	// A dialog is C++ all the way down and may throw; nothing may cross back
+	// into the host's C frame, and there is nothing useful to report anyway --
+	// a settings dialog that failed changed no settings.
+	try {
+		static_cast<nesfe::SdlVideo*>(self)->configure();
+	} catch (...) { }
+}
+
 void videoWindowToFrame(void* self, int windowX, int windowY,
 		int* frameX, int* frameY) {
 	static_cast<nesfe::SdlVideo*>(self)->windowToFrame(windowX, windowY,
@@ -98,7 +107,7 @@ const nes_video_api VIDEO_API = {
 	videoPresent,
 	videoSetTitle,
 	videoSaveScreenshot,
-	nullptr,          // no settings dialog yet; the host checks before calling
+	videoConfigure,
 	videoNativeWindow,
 	videoWindowToFrame
 };
