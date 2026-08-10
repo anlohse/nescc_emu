@@ -80,6 +80,17 @@ private:
 	int m_height;
 	/** What the renderer's logical width is: m_width, or WIDE_WIDTH. */
 	int m_logicalWidth;
+
+	/**
+	 * The texture's own size, which is the console's unless a filter expands it.
+	 *
+	 * The CRT style has to draw a pattern *within* each console pixel, so it
+	 * needs a texture three times the size and a renderer told to treat that as
+	 * the picture. Everything else uploads 256x240 and lets the renderer scale.
+	 */
+	int m_textureWidth;
+	int m_textureHeight;
+	bool m_crt;
 };
 
 /** Queued audio: no callback thread, so no locking against one. */

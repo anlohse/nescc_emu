@@ -489,7 +489,31 @@ ROM could only be opened from a command line.
    A read-only edit control rather than a message box, because thirty lines need to scroll
    and two columns need a fixed pitch to line up -- and because being able to select a line
    and copy it is a reasonable thing to want from a page listing what your keys do.
-5. **Dialogs and menus off Windows.** Both say so rather than opening nothing.
+5. ~~**A CRT scaling style.**~~ Done, from a suggestion that turned out to be the right
+   structure: every console pixel becomes a 3x3 cell, the three columns lead with red,
+   green and blue, and the last row is dimmer. That is a shadow mask and a scanline rather
+   than a filter smeared over the finished picture, and it needs no shader -- which
+   matters, because `SDL_Renderer` does not portably offer one.
+
+   The proposal was for each column to carry *only* its own channel, and measuring is what
+   changed it. Pure separation costs two thirds of the light, and the obvious repair does
+   not work: almost every NES colour already has a channel near full, so gain clips it
+   instantly. Across the whole palette, raising the gain from 2 to 5 bought the picture 6%
+   more brightness and clipped 120 of its 192 channels flat. Strong-but-not-absolute
+   stripes keep the pattern, keep three quarters of the brightness, and are closer to a
+   real mask, where stripes bleed and the glass in front mixes them.
+
+   The expansion is a plain function with a test beside it, so the arithmetic -- which
+   column leads, how dim the last row is, and what the whole thing does to average
+   brightness -- is checked without a window. Finding the numbers by measurement is why
+   `CRT_STRIPE`, `CRT_GAIN` and `CRT_SCANLINE` have reasons rather than history.
+
+   One bug worth recording, because it was invisible in every screenshot: the light gun
+   maps window pixels to console pixels by undoing the renderer's scale, and only the X
+   axis was being corrected. That was harmless while the logical height matched the
+   picture, and wrong the moment the CRT style made it three times taller -- every shot
+   would have read as off the screen.
+6. **Dialogs and menus off Windows.** Both say so rather than opening nothing.
 
 ## Further out
 

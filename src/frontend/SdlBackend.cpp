@@ -2,6 +2,7 @@
 
 #include "BindingsDialog.h"
 #include "../plugin/FieldsDialog.h"
+#include "CrtFilter.h"
 
 #include <SDL_syswm.h>
 
@@ -59,7 +60,8 @@ SDL_JoystickID instanceId(SDL_GameController* pad) {
 
 SdlVideo::SdlVideo(const nes_host* host) :
 		m_host(host), m_window(nullptr), m_renderer(nullptr), m_texture(nullptr),
-		m_width(0), m_height(0), m_logicalWidth(0) {
+		m_width(0), m_height(0), m_logicalWidth(0),
+		m_textureWidth(0), m_textureHeight(0), m_crt(false) {
 	// The console's fixed palette, pre-expanded with an opaque alpha.
 	const std::uint32_t* rgb = nes::Ppu::nesPaletteRgb();
 	for (int i = 0; i < 64; i++)
@@ -73,7 +75,8 @@ SdlVideo::~SdlVideo() {
 bool SdlVideo::open(const VideoOptions& options, Error* error) {
 	m_width = nes::Ppu::SCREEN_WIDTH;
 	m_height = nes::Ppu::SCREEN_HEIGHT;
-	m_pixels.assign(static_cast<std::size_t>(m_width) * m_height, 0);
+	m_pixels.assign(static_cast<std::size_t>(m_width) * m_height
+			* CRT_SCALE * CRT_SCALE, 0);
 
 	m_window = SDL_CreateWindow(options.title,
 			SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
@@ -102,13 +105,28 @@ bool SdlVideo::open(const VideoOptions& options, Error* error) {
 	// so a circle drawn in a game is an ellipse at 256x240 and a circle at
 	// 292x240. Sharpness is a choice too -- these are 8x8 tiles, not
 	// photographs, and most people want to see them.
-	m_logicalWidth = (setting("aspect", "square") == "tv") ? WIDE_WIDTH : m_width;
-	SDL_RenderSetLogicalSize(m_renderer, m_logicalWidth, m_height);
+	const std::string filter = setting("filter", "sharp");
+	m_crt = (filter == "crt");
+
+	// The CRT style draws a pattern inside every console pixel, so its texture is
+	// three times the size and the renderer is told that *is* the picture. The
+	// logical size follows, which keeps the letterboxing and the aspect choice
+	// working exactly as they did.
+	const int scale = m_crt ? CRT_SCALE : 1;
+	m_textureWidth = m_width * scale;
+	m_textureHeight = m_height * scale;
+	m_logicalWidth = ((setting("aspect", "square") == "tv")
+			? WIDE_WIDTH : m_width) * scale;
+	SDL_RenderSetLogicalSize(m_renderer, m_logicalWidth, m_height * scale);
+
+	// Linear for the CRT style as well: at exactly 3x the texture lands 1:1 and
+	// nothing is resampled, and at any other size a smooth reduction of the
+	// stripes looks far more like a television than a jagged one.
 	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY,
-			setting("filter", "sharp") == "smooth" ? "linear" : "nearest");
+			(filter == "smooth" || m_crt) ? "linear" : "nearest");
 
 	m_texture = SDL_CreateTexture(m_renderer, SDL_PIXELFORMAT_ARGB8888,
-			SDL_TEXTUREACCESS_STREAMING, m_width, m_height);
+			SDL_TEXTUREACCESS_STREAMING, m_textureWidth, m_textureHeight);
 	if (!m_texture) {
 		if (error) *error = std::string("SDL_CreateTexture: ") + SDL_GetError();
 		close();
@@ -138,11 +156,17 @@ void SdlVideo::close() {
 void SdlVideo::present(const std::uint8_t* indices, int width, int height) {
 	if (!m_texture || width != m_width || height != m_height)
 		return;
-	for (std::size_t i = 0; i < m_pixels.size(); i++)
-		m_pixels[i] = m_argbPalette[indices[i] & 0x3F];
+
+	if (m_crt) {
+		crtExpand(indices, m_width, m_height, m_argbPalette, m_pixels.data());
+	} else {
+		const std::size_t count = static_cast<std::size_t>(m_width) * m_height;
+		for (std::size_t i = 0; i < count; i++)
+			m_pixels[i] = m_argbPalette[indices[i] & 0x3F];
+	}
 
 	SDL_UpdateTexture(m_texture, nullptr, m_pixels.data(),
-			m_width * static_cast<int>(sizeof(std::uint32_t)));
+			m_textureWidth * static_cast<int>(sizeof(std::uint32_t)));
 	SDL_RenderClear(m_renderer);
 	SDL_RenderCopy(m_renderer, m_texture, nullptr, nullptr);
 	SDL_RenderPresent(m_renderer);
@@ -174,15 +198,22 @@ void SdlVideo::windowToFrame(int windowX, int windowY, int* frameX, int* frameY)
 	float logicalY = 0.0f;
 	SDL_RenderWindowToLogical(m_renderer, windowX, windowY, &logicalX, &logicalY);
 
-	// Logical units are not console pixels when the picture is stretched to the
-	// television's aspect: the renderer is working in a 292-wide space and the
-	// framebuffer is 256 wide. A light gun asking where it is pointed wants the
-	// pixel, so undo the stretch rather than reporting a column that does not
-	// exist.
+	// Logical units are not console pixels whenever the renderer is working in a
+	// bigger space than the framebuffer: stretched to the television's aspect it
+	// is 292 wide against 256, and with the CRT style it is three times both. A
+	// light gun asking where it is pointed wants the pixel, so undo whatever the
+	// scale is rather than reporting a row or column that does not exist.
+	//
+	// Both axes. Y needed no correction until the CRT style made the logical
+	// height 720 against a 240-line picture, at which point every shot would
+	// have read as off the screen.
+	const int logicalHeight = m_crt ? m_height * CRT_SCALE : m_height;
 	const int x = (m_logicalWidth > 0 && m_logicalWidth != m_width)
 			? static_cast<int>(logicalX) * m_width / m_logicalWidth
 			: static_cast<int>(logicalX);
-	const int y = static_cast<int>(logicalY);
+	const int y = (logicalHeight != m_height)
+			? static_cast<int>(logicalY) * m_height / logicalHeight
+			: static_cast<int>(logicalY);
 	// Outside the picture is a real answer here, not a failure: the player is
 	// pointing the gun at the letterbox, or off the television entirely.
 	if (x < 0 || y < 0 || x >= m_width || y >= m_height)
@@ -217,7 +248,9 @@ void SdlVideo::configure() {
 	fields[0].label = "Scaling";
 	fields[0].options.push_back("Sharp  (nearest neighbour)");
 	fields[0].options.push_back("Smooth  (linear)");
-	fields[0].selected = (setting("filter", "sharp") == "smooth") ? 1 : 0;
+	fields[0].options.push_back("CRT  (RGB stripes and scanlines)");
+	const std::string filter = setting("filter", "sharp");
+	fields[0].selected = (filter == "smooth") ? 1 : (filter == "crt" ? 2 : 0);
 
 	fields[1].label = "Pixel shape";
 	fields[1].options.push_back("Square  (256 x 240)");
@@ -235,7 +268,8 @@ void SdlVideo::configure() {
 			"Takes effect the next time the emulator starts."))
 		return;
 
-	putSetting("filter", fields[0].selected == 1 ? "smooth" : "sharp");
+	putSetting("filter", fields[0].selected == 2 ? "crt"
+			: (fields[0].selected == 1 ? "smooth" : "sharp"));
 	putSetting("aspect", fields[1].selected == 1 ? "tv" : "square");
 }
 
@@ -247,9 +281,12 @@ void SdlVideo::setTitle(const char* title) {
 bool SdlVideo::saveScreenshot(const char* path) {
 	if (m_pixels.empty())
 		return false;
+	// Whatever is in the texture, including the CRT pattern if that is on: a
+	// screenshot of a television should look like the television.
 	SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormatFrom(
-			m_pixels.data(), m_width, m_height, 32,
-			m_width * static_cast<int>(sizeof(std::uint32_t)), SDL_PIXELFORMAT_ARGB8888);
+			m_pixels.data(), m_textureWidth, m_textureHeight, 32,
+			m_textureWidth * static_cast<int>(sizeof(std::uint32_t)),
+			SDL_PIXELFORMAT_ARGB8888);
 	if (!surface)
 		return false;
 	const bool ok = SDL_SaveBMP(surface, path) == 0;
