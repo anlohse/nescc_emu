@@ -14,7 +14,7 @@ that keeps the status bar fixed while the level moves beneath it all work.
 | iNES container parsing | 1.0 with trainers; NES 2.0 read as 1.0 plus its timing field |
 | Mappers | 0 NROM, 1 MMC1, 2 UxROM, 3 CNROM, 4 MMC3, 7 AxROM, 87 |
 | Region | NTSC and PAL, read from the header and applied to every clock |
-| Mapper IRQ | MMC3's scanline counter, merged with the APU onto one CPU line |
+| Mapper IRQ | MMC3's counter, clocked by rising edges on PPU A12, merged with the APU onto one CPU line |
 | Bus conflicts | on the discrete boards, when the NES 2.0 submapper declares them |
 | MMC1 serial port | five-bit shift register, with the consecutive-write rule applied |
 | CPU bus | RAM + mirroring, PPU/cartridge routing, `peek()` for debuggers |
@@ -473,12 +473,13 @@ Nyquist folds back down as noise.
   rather than a tile or two later.
 - **Sprite overflow is set by the real 8-per-line rule**, not by hardware's buggy
   evaluation, which both over- and under-reports on real silicon.
-- **MMC3's counter is clocked once per scanline**, at dot 260, where the sprite fetches
-  begin. Hardware counts rising edges on PPU address line A12, which during rendering
-  works out to the same thing — but a game that toggles `$2000`'s pattern-table bits
-  mid-line can produce extra edges this will miss.
-- **The `$2002` read race is not modelled** — reading exactly as vblank is raised should
-  suppress the NMI.
+- **MMC3's counter is clocked a few dots off the real fetch.** It counts rising edges on
+  PPU A12 now, taken from the fetch schedule — pattern fetches drive the line high, and
+  an edge only counts after it has been low for nine dots, which is what throws away the
+  every-eight-dots chatter of ordinary background fetches. Four of blargg's six
+  `mmc3_test` ROMs pass; `4-scanline_timing` says the edge lands a little early.
+- **MMC6, and the difference between MMC3 revisions**, are not implemented. The revisions
+  disagree about whether reloading a counter that has just reached zero raises an IRQ.
 - **OAM DMA always charges 513 cycles**; hardware charges 514 when the write lands on
   an odd CPU cycle, which nothing tracks yet.
 
@@ -499,13 +500,11 @@ copyleft does not reach this code.
 The short list below is the immediate work; [ROADMAP.md](ROADMAP.md) has the longer
 view, including the backend-interface design and what would be needed for a 1.0.
 
-1. nestest, whenever the ROM is available — still the only thing that would validate
-   the undocumented opcodes and exact cycle counts against a reference. The `blargg`
-   APU and MMC3 test ROMs are the equivalent gates for sound and for the scanline
-   counter, and would settle how much the timing approximations above actually matter.
-2. A decimal-mode switch in emu6502: the 2A03 ignores the `D` flag in `ADC`/`SBC`, and
-   the core currently implements full BCD.
-3. Save states — the console's whole state is a handful of plain structs, so this is
+1. The rest of blargg's suites. 42 of 93 pass; the largest clusters left are the dots
+   around the vblank edge and interrupt latency inside the CPU core, each listed with its
+   cause in `test_src/testBlargg.cpp`. nestest would still be worth having as a trace to
+   compare against, whenever that ROM's licensing is clear.
+2. Save states — the console's whole state is a handful of plain structs, so this is
    mostly a serialisation exercise, and it makes debugging the harder games practical.
 4. Famicom expansion audio, if a cart that uses it ever turns up. VRC6 is the usual
    first one, and it would mean letting a mapper contribute to the APU's mix.

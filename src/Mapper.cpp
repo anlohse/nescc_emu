@@ -415,7 +415,7 @@ void Mmc3Mapper::writeRegister(std::uint16_t address, std::uint8_t value) {
 	}
 }
 
-void Mmc3Mapper::ppuScanline() {
+void Mmc3Mapper::ppuA12Rise() {
 	if (m_irqCounter == 0 || m_irqReload) {
 		m_irqCounter = m_irqLatch;
 		m_irqReload = false;

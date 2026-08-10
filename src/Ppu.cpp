@@ -13,6 +13,17 @@ namespace {
  * above this is simply "not near the boundary".
  */
 const int VBLANK_RACE_DOTS = 2;
+
+// How long PPU address line A12 must sit low before a rise counts. The MMC3
+// filters that line, and the filter works out at roughly three CPU cycles --
+// nine dots. It is what separates the once-a-line edge a game wants to count
+// from the every-eight-dots chatter of ordinary background fetches.
+const int A12_FILTER_DOTS = 9;
+
+/** True during the four dots of an eight-dot fetch group that read pattern data. */
+bool patternPhase(int offsetWithinGroup) {
+	return (offsetWithinGroup & 4) != 0;
+}
 } // namespace
 
 /*
@@ -71,6 +82,11 @@ void Ppu::reset() {
 	m_dotsSinceVblank = VBLANK_RACE_DOTS;
 	m_suppressVblank = false;
 	m_vblankRaces = 0;
+	m_a12 = false;
+	// Long enough that the first rise after a reset counts, which is what a
+	// board sitting idle with nothing driving the line would see.
+	m_a12LowDots = A12_FILTER_DOTS;
+	m_spriteFetchA12.fill(false);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -130,17 +146,19 @@ void Ppu::tickOne() {
 	if (renderingEnabled() && (visible || preRender)) {
 		if (m_dot == 256)
 			incrementY();
-		else if (m_dot == 257)
+		else if (m_dot == 257) {
 			copyHorizontalBits();
-		else if (m_dot == 260 && m_cartridge)
-			// Where the sprite fetches begin, and so where PPU address line A12
-			// rises on a real board. MMC3 counts that edge to time its IRQ;
-			// signalling it once per line is the standard approximation, and it
-			// is only reached while rendering, which is when A12 toggles at all.
-			m_cartridge->ppuScanline();
-		else if (preRender && m_dot >= 280 && m_dot <= 304)
+			// The fetches from here to dot 320 are for the *next* line, so the
+			// tables they read from have to be worked out from that line's
+			// sprites rather than the one just drawn.
+			scanSpriteFetches(m_scanline + 1);
+		} else if (preRender && m_dot >= 280 && m_dot <= 304)
 			copyVerticalBits();
 	}
+
+	// After the rendering work, so a fetch and the address it puts on the bus
+	// belong to the same dot.
+	updateA12();
 
 	if (m_dotsSinceVblank < VBLANK_RACE_DOTS)
 		m_dotsSinceVblank++;
@@ -195,6 +213,71 @@ void Ppu::copyHorizontalBits() {
 
 void Ppu::copyVerticalBits() {
 	m_vramAddr = static_cast<std::uint16_t>((m_vramAddr & ~0x7BE0) | (m_tempAddr & 0x7BE0));
+}
+
+/* ------------------------------------------------------------------------- */
+/* A12                                                                        */
+/* ------------------------------------------------------------------------- */
+
+void Ppu::scanSpriteFetches(int line) {
+	// Eight fetches happen whether or not there are eight sprites: the unused
+	// slots re-fetch tile $FF, which in 8x16 mode lives in the upper table.
+	// That is not a detail worth arguing with -- it is why a mostly empty line
+	// still toggles A12 the way a full one does.
+	const bool tall = (m_ctrl & CTRL_SPRITE_SIZE_16) != 0;
+	const bool table = (m_ctrl & CTRL_SPRITE_PATTERN) != 0;
+	m_spriteFetchA12.fill(tall ? true : table);
+	if (!tall || line < 0)
+		return;
+
+	const int height = 16;
+	int found = 0;
+	for (int i = 0; i < 64 && found < 8; i++) {
+		const int spriteY = m_oam[i * 4 + 0];
+		const int row = line - spriteY - 1;
+		if (row < 0 || row >= height)
+			continue;
+		// In 8x16 the tile's low bit chooses the table, and the rest of the
+		// index picks the pair. So which half of CHR a sprite fetch lands in is
+		// per sprite rather than per frame.
+		m_spriteFetchA12[found++] = (m_oam[i * 4 + 1] & 1) != 0;
+	}
+}
+
+bool Ppu::a12Level() const {
+	const bool visible = m_scanline < SCREEN_HEIGHT;
+	const bool preRender = m_scanline == m_preRenderScanline;
+	if (!renderingEnabled() || !(visible || preRender)) {
+		// Nothing is fetching, so the line carries whatever address the CPU put
+		// there: a $2006 write, or the auto-increment after $2007. Games drive
+		// the counter this way on purpose when the screen is off.
+		return (m_vramAddr & 0x1000) != 0;
+	}
+
+	const bool bgTable = (m_ctrl & CTRL_BG_PATTERN) != 0;
+	if (m_dot >= 1 && m_dot <= 256)
+		return bgTable && patternPhase((m_dot - 1) & 7);
+	if (m_dot >= 257 && m_dot <= 320) {
+		const int slot = (m_dot - 257) / 8;
+		return m_spriteFetchA12[slot & 7] && patternPhase((m_dot - 257) & 7);
+	}
+	if (m_dot >= 321 && m_dot <= 336)   // the next line's first two tiles
+		return bgTable && patternPhase((m_dot - 321) & 7);
+
+	// Dot 0 is idle, and 337-340 are two more nametable fetches: A12 low.
+	return false;
+}
+
+void Ppu::updateA12() {
+	const bool level = a12Level();
+	if (level) {
+		if (!m_a12 && m_a12LowDots >= A12_FILTER_DOTS && m_cartridge)
+			m_cartridge->ppuA12Rise();
+		m_a12LowDots = 0;
+	} else if (m_a12LowDots < A12_FILTER_DOTS) {
+		m_a12LowDots++;
+	}
+	m_a12 = level;
 }
 
 /* ------------------------------------------------------------------------- */

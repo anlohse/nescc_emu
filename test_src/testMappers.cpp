@@ -623,10 +623,10 @@ TEST_CASE("mmc3_irq_fires_after_the_latched_number_of_scanlines") {
 	// The first clock reloads rather than counting, so a latch of 4 fires on
 	// the fifth scanline, not the fourth.
 	for (int i = 0; i < 4; i++) {
-		cart->ppuScanline();
+		cart->ppuA12Rise();
 		CHECK_FALSE(cart->irqAsserted());
 	}
-	cart->ppuScanline();
+	cart->ppuA12Rise();
 	CHECK(cart->irqAsserted());
 }
 
@@ -635,8 +635,8 @@ TEST_CASE("mmc3_irq_is_acknowledged_by_disabling_it") {
 	cart->cpuWrite(0xC000, 1);
 	cart->cpuWrite(0xC001, 0);
 	cart->cpuWrite(0xE001, 0);
-	cart->ppuScanline();
-	cart->ppuScanline();
+	cart->ppuA12Rise();
+	cart->ppuA12Rise();
 	REQUIRE(cart->irqAsserted());
 
 	cart->cpuWrite(0xE000, 0);                // disable, which also acknowledges
@@ -644,7 +644,7 @@ TEST_CASE("mmc3_irq_is_acknowledged_by_disabling_it") {
 
 	// And it stays quiet while disabled.
 	for (int i = 0; i < 10; i++)
-		cart->ppuScanline();
+		cart->ppuA12Rise();
 	CHECK_FALSE(cart->irqAsserted());
 }
 
@@ -654,7 +654,7 @@ TEST_CASE("a_disabled_mmc3_counter_never_asserts") {
 	cart->cpuWrite(0xC001, 0);
 	// $E001 never written: the counter runs but the line stays up.
 	for (int i = 0; i < 20; i++)
-		cart->ppuScanline();
+		cart->ppuA12Rise();
 	CHECK_FALSE(cart->irqAsserted());
 }
 
@@ -667,7 +667,13 @@ TEST_CASE("the_ppu_clocks_the_counter_only_while_rendering") {
 	Ppu ppu(cart.get());
 	ppu.reset();
 
-	// Rendering off: A12 never toggles on real hardware, so nothing counts.
+	// Backgrounds low, sprites high: A12 goes up once a line, when the fetches
+	// cross from one table to the other. That is the arrangement every game
+	// using this counter has to adopt, because it is the only thing the board
+	// can see.
+	ppu.writeRegister(0, Ppu::CTRL_SPRITE_PATTERN);
+
+	// Rendering off: nothing is fetching, so A12 never moves and nothing counts.
 	ppu.writeRegister(1, 0x00);
 	ppu.tick(341 * 300);
 	CHECK_FALSE(cart->irqAsserted());
@@ -676,6 +682,25 @@ TEST_CASE("the_ppu_clocks_the_counter_only_while_rendering") {
 	ppu.writeRegister(1, Ppu::MASK_SHOW_BACKGROUND);
 	ppu.tick(341 * 12);
 	CHECK(cart->irqAsserted());
+}
+
+TEST_CASE("both_tables_the_same_means_the_counter_never_runs") {
+	// The counter is not a scanline counter, whatever it is usually called: it
+	// counts rising edges on PPU A12. Put backgrounds and sprites in the same
+	// pattern table and that line never rises, so a board sitting in a fully
+	// rendering frame counts nothing at all. Hardware does this too, which is
+	// why a game wanting IRQs has no choice about where it puts its tiles.
+	auto cart = makeCart(4, 8, 0, BANK_8K);
+	cart->cpuWrite(0xC000, 4);
+	cart->cpuWrite(0xC001, 0);
+	cart->cpuWrite(0xE001, 0);
+
+	Ppu ppu(cart.get());
+	ppu.reset();
+	ppu.writeRegister(0, 0x00);                       // both tables at $0000
+	ppu.writeRegister(1, Ppu::MASK_SHOW_BACKGROUND);
+	ppu.tick(341 * 300);
+	CHECK_FALSE(cart->irqAsserted());
 }
 
 TEST_CASE("an_mmc3_irq_reaches_the_cpu") {
@@ -706,6 +731,9 @@ TEST_CASE("an_mmc3_irq_reaches_the_cpu") {
 	console.reset();
 	REQUIRE_EQ(console.cpuRegisters().pc, 0xE000);
 
+	// Sprites in the upper pattern table, so A12 has an edge to give the board
+	// once a line. With both tables the same the counter would never run.
+	console.bus().write(0x2000, Ppu::CTRL_SPRITE_PATTERN);
 	console.bus().write(0x2001, Ppu::MASK_SHOW_BACKGROUND);   // rendering on
 	console.bus().write(0xC000, 4);           // latch
 	console.bus().write(0xC001, 0);           // reload

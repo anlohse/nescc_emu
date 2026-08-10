@@ -80,7 +80,7 @@ public:
 	 * scanlines; during rendering that works out to one per line, which is
 	 * what this models. Boards without a counter ignore it.
 	 */
-	virtual void ppuScanline() { }
+	virtual void ppuA12Rise() { }
 
 	/**
 	 * True while the board is holding the CPU's IRQ line down.
@@ -367,7 +367,7 @@ public:
 
 	int number() const override { return 4; }
 
-	void ppuScanline() override;
+	void ppuA12Rise() override;
 	bool irqAsserted() const override { return m_irqPending; }
 
 protected:

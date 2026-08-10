@@ -48,7 +48,7 @@ public:
 	Mapper& mapper() { return *m_mapper; }
 
 	/** Tell the board a scanline's pattern fetches happened. Drives MMC3's IRQ. */
-	void ppuScanline() { m_mapper->ppuScanline(); }
+	void ppuA12Rise() { m_mapper->ppuA12Rise(); }
 	/** True while the board is holding the CPU's IRQ line down. */
 	bool irqAsserted() const { return m_mapper->irqAsserted(); }
 

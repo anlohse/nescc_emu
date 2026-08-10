@@ -234,17 +234,10 @@ struct Known {
 };
 
 const Known KNOWN_FAILURES[] = {
-	// The MMC3's IRQ counter is clocked by rising edges on PPU address line
-	// A12, which this emulator approximates by counting scanlines. That is
-	// right for a game that puts backgrounds and sprites in different pattern
-	// tables and never touches $2006 mid-frame, which is most of them, and
-	// wrong for everything these six ROMs check.
-	{ "mmc3_test/1-clocking",        "MMC3 IRQ counts scanlines, not A12 rises" },
-	{ "mmc3_test/2-details",         "MMC3 IRQ counts scanlines, not A12 rises" },
-	{ "mmc3_test/3-A12_clocking",    "MMC3 IRQ counts scanlines, not A12 rises" },
-	{ "mmc3_test/4-scanline_timing", "MMC3 IRQ counts scanlines, not A12 rises" },
-	{ "mmc3_test/5-MMC3",            "MMC3 IRQ counts scanlines, not A12 rises" },
-	{ "mmc3_test/6-MMC6",            "MMC6 is not implemented" },
+	// Four of these six pass now that A12 is modelled. What is left is the
+	// exact dot of the edge, and a board that is not implemented at all.
+	{ "mmc3_test/4-scanline_timing", "the A12 rise is a few dots off the real fetch" },
+	{ "mmc3_test/6-MMC6",            "MMC6, and the MMC3 revisions, are not implemented" },
 
 	// Vblank, the NMI it raises and the flag it sets are placed to the dot
 	// here, but what happens in the two or three dots around the edge is not:
@@ -353,13 +346,14 @@ TEST_CASE("blargg_test_roms") {
 				// Not a failure, but it must not pass unnoticed: the reason
 				// recorded against it is now wrong.
 				unexpectedPasses.push_back(label);
-				MESSAGE("now passing, but listed as known-failing (", known, "): ", label);
+				MESSAGE("now passing, but listed as known-failing (",
+						std::string(known), "): ", label);
 			}
 			break;
 		case Outcome::FAILED:
 			if (known) {
 				expected++;
-				MESSAGE("known failure (", known, "): ", label,
+				MESSAGE("known failure (", std::string(known), "): ", label,
 						" -- ", outcome.message);
 			} else {
 				failed++;

@@ -174,6 +174,31 @@ private:
 	void copyHorizontalBits();
 	void copyVerticalBits();
 
+	/**
+	 * A12's level for the dot just reached.
+	 *
+	 * While rendering it comes from the fetch schedule, which is fixed: two
+	 * dots of nametable, two of attribute, then four of pattern data, over and
+	 * over. So A12 is high only during the pattern fetches, and only when that
+	 * pattern lives in the upper table. Outside rendering nothing is fetching,
+	 * and the line simply carries whatever address the CPU last left in v.
+	 */
+	bool a12Level() const;
+
+	/**
+	 * Watch A12 for a rising edge, and tell the cartridge about it.
+	 *
+	 * The edge only counts if the line has been low for a while first. That
+	 * filter is the whole reason an MMC3 can count scanlines at all: with
+	 * backgrounds in the upper table A12 rises every eight dots, far too often
+	 * to mean anything, and the filter throws all of those away. What survives
+	 * is the once-per-line transition between background and sprite fetches.
+	 */
+	void updateA12();
+
+	/** Which table each of the next line's sprite fetches will read from. */
+	void scanSpriteFetches(int line);
+
 	Cartridge* m_cartridge;
 
 	// 4 KB covers four-screen boards; the usual two-screen layouts fold into
@@ -216,6 +241,17 @@ private:
 	int m_dotsSinceVblank;      // capped; large means "not near the boundary"
 	bool m_suppressVblank;      // a read got in first; the flag must not come up
 	unsigned long m_vblankRaces;
+
+	// PPU address line A12, which is a real wire and the only thing an MMC3
+	// counts. It goes high whenever the address being fetched is in $1000-$1FFF
+	// -- pattern fetches from the upper table while rendering, or whatever the
+	// CPU last left in v when it is not.
+	bool m_a12;
+	int m_a12LowDots;           // how long it has been low, for the filter
+	// Which pattern table each of the next line's eight sprite fetches lands
+	// in. Only interesting for 8x16 sprites, where it comes from each tile's
+	// low bit rather than from $2000.
+	std::array<bool, 8> m_spriteFetchA12;
 
 	std::array<std::uint8_t, SCREEN_WIDTH * SCREEN_HEIGHT> m_framebuffer;
 
