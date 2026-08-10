@@ -78,13 +78,21 @@ TEST_CASE("nmi_fires_on_vblank_only_when_enabled") {
 		CHECK(ppu.takeNmi());
 		CHECK_FALSE(ppu.takeNmi());    // consumed
 	}
-	SUBCASE("enabling during vblank fires immediately") {
+	SUBCASE("enabling during vblank fires after the next instruction") {
+		// "Immediately" is a word hardware does not use here. The write lands in
+		// its instruction's last cycle, past the point where the CPU samples
+		// /NMI, so the interrupt cannot be taken until the end of the one after
+		// -- which is what blargg's 04-nmi_control measures, and what this
+		// asked for the wrong way round until it did.
 		Ppu ppu;
 		ppu.tick(dotsTo(Ppu::VBLANK_SCANLINE, 2));
 		REQUIRE(ppu.inVBlank());
 		REQUIRE_FALSE(ppu.takeNmi());
+
 		ppu.writeRegister(0, Ppu::CTRL_NMI_ENABLE);
-		CHECK(ppu.takeNmi());
+		CHECK_FALSE(ppu.takeNmi());   // the instruction that wrote it
+		CHECK(ppu.takeNmi());         // the one after: now it is taken
+		CHECK_FALSE(ppu.takeNmi());   // and consumed
 	}
 }
 

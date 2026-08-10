@@ -248,8 +248,53 @@ Roughly in order of how likely a real game is to notice:
   silently flip it — the first version did exactly that and broke Klaus Dormann's
   decimal tests.
 
-  The largest clusters left are the MMC3's A12 clocking (6 ROMs), the dots around the
-  vblank edge (7), and interrupt latency inside the CPU core (5).
+  ~~The largest clusters left are the MMC3's A12 clocking (6 ROMs), the dots around the
+  vblank edge (7), and interrupt latency inside the CPU core (5).~~ The MMC3 cluster is
+  mostly closed: **42 of 93 pass now**.
+
+  The counter on that board is not a scanline counter, whatever everyone calls it. It
+  counts rising edges on PPU address line A12, and the PPU now produces that waveform
+  from the fetch schedule rather than pretending: two dots of nametable, two of
+  attribute, four of pattern data, repeating, with A12 high only while a pattern fetch
+  is reading the upper table. An edge counts only after the line has been low for nine
+  dots, which is what discards the every-eight-dots chatter a background in the upper
+  table produces and leaves the once-a-line crossing between background and sprite
+  fetches — the edge a game actually times against.
+
+  The payoff is that clocking now works the way the hardware's does, including from
+  `$2006` writes with the screen off, which nothing here handled before. Four of the six
+  `mmc3_test` ROMs pass; `4-scanline_timing` says the edge is still a few dots early,
+  and MMC6 is not implemented at all.
+
+  Two of the old unit tests had to change, and the change is the interesting part: they
+  enabled rendering with backgrounds *and* sprites in `$0000` and expected IRQs. On
+  hardware A12 never rises in that configuration and the counter never runs, so a game
+  wanting this interrupt has no choice about where it puts its tiles. The tests said
+  what the approximation did; they now say what the board does.
+
+  All ten commercial ROMs render byte-identical frames across the change, which is the
+  expected result: they all use one table for backgrounds and the other for sprites,
+  where an A12 model and a per-scanline count agree exactly.
+
+  The vblank cluster gave up one more: an NMI raised by enabling it in `$2000` while
+  the flag is already set is taken after the *next* instruction, not this one. The write
+  lands in its instruction's final cycle, past the point where the CPU samples /NMI. A
+  unit test here had asserted the opposite in as many words -- "fires immediately" -- so
+  it was wrong in the same direction as the code, which is the failure mode these ROMs
+  exist to catch. **43 of 93 pass.**
+
+  The six that remain in that cluster all measure one thing from different angles:
+  *which CPU cycle a PPU register access belongs to*. The bus advances the PPU a whole
+  cycle -- three dots -- before serving an access, so every access is dated up to three
+  dots late. Testing that is a change to when every device sees every access, not a
+  patch to any one ROM, and it wants its own sitting.
+
+  One dead end worth recording: `10-even_odd_timing` reports the odd-frame skip as
+  decided too late, and latching the rendering flag a dot earlier changed nothing it
+  measures. That change was reverted rather than kept -- an unproven behavioural change
+  that does not fix its test is worse than none.
+
+  The other large cluster is interrupt latency inside the CPU core (5 ROMs).
 - ~~**Bus conflicts** on UxROM and CNROM~~ — done, driven by the NES 2.0 submapper
   rather than guessed from the mapper number.
 - ~~**MMC1's consecutive-write rule.**~~ Done, and it needed fixing in the CPU first: a

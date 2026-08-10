@@ -234,17 +234,10 @@ struct Known {
 };
 
 const Known KNOWN_FAILURES[] = {
-	// The MMC3's IRQ counter is clocked by rising edges on PPU address line
-	// A12, which this emulator approximates by counting scanlines. That is
-	// right for a game that puts backgrounds and sprites in different pattern
-	// tables and never touches $2006 mid-frame, which is most of them, and
-	// wrong for everything these six ROMs check.
-	{ "mmc3_test/1-clocking",        "MMC3 IRQ counts scanlines, not A12 rises" },
-	{ "mmc3_test/2-details",         "MMC3 IRQ counts scanlines, not A12 rises" },
-	{ "mmc3_test/3-A12_clocking",    "MMC3 IRQ counts scanlines, not A12 rises" },
-	{ "mmc3_test/4-scanline_timing", "MMC3 IRQ counts scanlines, not A12 rises" },
-	{ "mmc3_test/5-MMC3",            "MMC3 IRQ counts scanlines, not A12 rises" },
-	{ "mmc3_test/6-MMC6",            "MMC6 is not implemented" },
+	// Four of these six pass now that A12 is modelled. What is left is the
+	// exact dot of the edge, and a board that is not implemented at all.
+	{ "mmc3_test/4-scanline_timing", "the A12 rise is a few dots off the real fetch" },
+	{ "mmc3_test/6-MMC6",            "MMC6, and the MMC3 revisions, are not implemented" },
 
 	// Vblank, the NMI it raises and the flag it sets are placed to the dot
 	// here, but what happens in the two or three dots around the edge is not:
@@ -252,9 +245,15 @@ const Known KNOWN_FAILURES[] = {
 	// interaction with enabling rendering. The $2002 race was built from
 	// reasoning about this and is only partly right, which is precisely what
 	// these ROMs are for.
+	//
+	// All six of these measure the same thing from different angles: which CPU
+	// cycle a PPU register access belongs to. The bus advances the PPU a whole
+	// cycle -- three dots -- before serving an access, so every one of them is
+	// dated late by up to that much. That is the next thing to test, and it is
+	// a change to when every device sees every access rather than a patch to
+	// any one of these.
 	{ "ppu_vbl_nmi/02-vbl_set_time",   "vblank flag set time is off by a dot" },
 	{ "ppu_vbl_nmi/03-vbl_clear_time", "vblank flag clear time is off by a dot" },
-	{ "ppu_vbl_nmi/04-nmi_control",    "NMI is taken a instruction too early" },
 	{ "ppu_vbl_nmi/05-nmi_timing",     "NMI timing at the vblank edge" },
 	{ "ppu_vbl_nmi/06-suppression",    "vblank suppression window is wrong" },
 	{ "ppu_vbl_nmi/08-nmi_off_timing", "NMI disable timing at the vblank edge" },
@@ -353,13 +352,14 @@ TEST_CASE("blargg_test_roms") {
 				// Not a failure, but it must not pass unnoticed: the reason
 				// recorded against it is now wrong.
 				unexpectedPasses.push_back(label);
-				MESSAGE("now passing, but listed as known-failing (", known, "): ", label);
+				MESSAGE("now passing, but listed as known-failing (",
+						std::string(known), "): ", label);
 			}
 			break;
 		case Outcome::FAILED:
 			if (known) {
 				expected++;
-				MESSAGE("known failure (", known, "): ", label,
+				MESSAGE("known failure (", std::string(known), "): ", label,
 						" -- ", outcome.message);
 			} else {
 				failed++;
