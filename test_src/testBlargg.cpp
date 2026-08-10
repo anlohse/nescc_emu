@@ -285,7 +285,6 @@ const Known KNOWN_FAILURES[] = {
 	{ "apu_reset/4017_written",     "$4017 is not written with $00 at power" },
 	{ "apu_reset/4017_timing",      "frame IRQ flag is set too late after reset" },
 	{ "apu_reset/len_ctrs_enabled", "length counters are not enabled at reset" },
-	{ "apu_test/8-dmc_rates",       "DMC rate 0's period is wrong" },
 
 	// Two smaller ones, each a piece of hardware that decays or corrupts in a
 	// way nothing here models yet.

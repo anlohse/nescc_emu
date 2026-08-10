@@ -572,7 +572,15 @@ void Apu::writeRegister(std::uint16_t address, std::uint8_t value) {
 	case 0x4010:
 		m_dmc.irqEnabled = (value & 0x80) != 0;
 		m_dmc.loop = (value & 0x40) != 0;
-		m_dmc.timerPeriod = m_dmcRates[value & 0x0F];
+		// Minus one, because every divider here reloads *after* reaching zero and
+		// so spends timerPeriod + 1 cycles on a step. For the pulses that is
+		// already right -- their register holds one less than the period by
+		// design, which is why a pulse's frequency is CPU / (16 * (P + 1)). The
+		// DMC's table is different: those are whole CPU cycles per sample, so
+		// loading one raw makes every rate a cycle slow. Small enough to hide in a
+		// tune, large enough for 8-dmc_rates to measure.
+		m_dmc.timerPeriod =
+				static_cast<std::uint16_t>(m_dmcRates[value & 0x0F] - 1);
 		// Clearing the enable also acknowledges any pending interrupt, which is
 		// how a handler shuts one off.
 		if (!m_dmc.irqEnabled)

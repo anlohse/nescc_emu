@@ -407,6 +407,66 @@ TEST_CASE("peeking_4015_does_not_acknowledge_the_irq") {
 	CHECK_FALSE(console.apu().irqAsserted()); // the real read clears it
 }
 
+TEST_CASE("a_dmc_sample_lasts_the_cycles_the_rate_table_says") {
+	// The rate table's entries are whole CPU cycles per output step, unlike a
+	// pulse's period register, which holds one less than its period because its
+	// divider reloads after reaching zero. Loading a rate raw gives every DMC
+	// sample one cycle too many -- inaudible in a tune, and precisely what
+	// blargg's 8-dmc_rates measures.
+	//
+	// Measured through the DMC's own interrupt, which needs no ears -- and
+	// measured as a *difference* between two sample lengths, which is what makes
+	// it exact. The interrupt marks the last byte being fetched rather than the
+	// last bit being shifted out, so how long the channel takes to get going is
+	// mixed into any single reading. Sixteen extra bytes is 128 extra output
+	// steps whatever that startup cost is, so subtracting two readings cancels it
+	// and leaves the period alone.
+	std::vector<std::uint8_t> prg;
+	testrom::setResetVector(prg, 0xC000);
+	prg[0x0000] = 0x4C;                       // spin: the CPU is not the subject
+	prg[0x0001] = 0x00;
+	prg[0x0002] = 0xC0;
+	prg[0x1000] = 0xAA;                       // the sample, at $D000
+
+	const std::vector<std::uint8_t> image =
+			testrom::build(testrom::Options(), prg);
+
+	// @param lengthReg $4013: the sample is lengthReg * 16 + 1 bytes.
+	auto cyclesToIrq = [&image](std::uint8_t lengthReg) {
+		auto cart = Cartridge::fromINes(image);
+		REQUIRE(cart != nullptr);
+		Nes console;
+		console.setCartridge(std::move(cart));
+		console.reset();
+
+		Apu& apu = console.apu();
+		apu.writeRegister(0x4010, 0x80);      // IRQ on, no loop, rate index 0
+		apu.writeRegister(0x4012, 0x40);      // $C000 + 0x40 * 64 = $D000
+		apu.writeRegister(0x4013, lengthReg);
+		apu.writeRegister(0x4015, Apu::ENABLE_DMC);
+
+		int cycles = 0;
+		while (cycles < 200000) {
+			apu.tick(1);
+			cycles++;
+			if ((apu.readStatus() & Apu::STATUS_DMC_IRQ) != 0)
+				return cycles;
+		}
+		return -1;
+	};
+
+	const int seventeen = cyclesToIrq(0x01);
+	const int thirtyThree = cyclesToIrq(0x02);
+	REQUIRE(seventeen > 0);
+	REQUIRE(thirtyThree > 0);
+	CAPTURE(seventeen);
+	CAPTURE(thirtyThree);
+
+	// Sixteen more bytes is 128 more output steps, at 428 cycles each. One cycle
+	// of error per step would show up here as 128.
+	CHECK_EQ(thirtyThree - seventeen, 128 * 428);
+}
+
 TEST_CASE("the_frame_irq_reaches_the_cpu") {
 	// The end-to-end path: the APU raises its level-triggered line, Nes::step
 	// forwards it, and the CPU vectors through $FFFE.
