@@ -4,15 +4,18 @@ namespace nes {
 
 namespace {
 /*
- * How far past the vblank flag going up a $2002 read still changes the outcome.
+ * How far past the vblank flag going up a $2002 read still costs the interrupt.
  *
  * Reading on the same dot returns the flag clear and loses the interrupt;
- * reading one dot later returns it set and still loses the interrupt, because
- * the /NMI line went down and came back up inside a single dot and the CPU
- * never sampled it. Two dots on, nothing is unusual any more. Anything at or
- * above this is simply "not near the boundary".
+ * reading one or two dots later returns it set and still loses the interrupt,
+ * because the /NMI line went down and came back up before the CPU sampled it.
+ * Three dots on, nothing is unusual any more.
+ *
+ * The number is blargg's, not a guess: 06-suppression prints one row per dot
+ * and asks for exactly one row where the flag is lost and three where the
+ * interrupt is.
  */
-const int VBLANK_RACE_DOTS = 2;
+const int VBLANK_RACE_DOTS = 3;
 
 // How long PPU address line A12 must sit low before a rise counts. The MMC3
 // filters that line, and the filter works out at roughly three CPU cycles --
@@ -81,7 +84,7 @@ void Ppu::reset() {
 	m_nmiDelay = 0;
 	m_sprite0HitDot = -1;
 	m_dotsSinceVblank = VBLANK_RACE_DOTS;
-	m_suppressVblank = false;
+	m_dotsSinceVblankEnd = VBLANK_RACE_DOTS;
 	m_vblankRaces = 0;
 	m_a12 = false;
 	// Long enough that the first rise after a reset counts, which is what a
@@ -163,23 +166,19 @@ void Ppu::tickOne() {
 
 	if (m_dotsSinceVblank < VBLANK_RACE_DOTS)
 		m_dotsSinceVblank++;
+	if (m_dotsSinceVblankEnd < VBLANK_RACE_DOTS)
+		m_dotsSinceVblankEnd++;
 
 	if (m_dot != 1)
 		return;
 
 	if (m_scanline == VBLANK_SCANLINE) {
 		m_dotsSinceVblank = 0;
-		if (m_suppressVblank) {
-			// A $2002 read landed on the dot before this one. On hardware the
-			// read wins outright: the flag never comes up at all, and with it
-			// no interrupt. The frame is otherwise ordinary.
-			m_suppressVblank = false;
-		} else {
-			m_status |= STATUS_VBLANK;
-			if (m_ctrl & CTRL_NMI_ENABLE)
-				m_nmiPending = true;
-		}
+		m_status |= STATUS_VBLANK;
+		if (m_ctrl & CTRL_NMI_ENABLE)
+			m_nmiPending = true;
 	} else if (preRender) {
+		m_dotsSinceVblankEnd = 0;
 		m_status &= static_cast<std::uint8_t>(
 				~(STATUS_VBLANK | STATUS_SPRITE0 | STATUS_OVERFLOW));
 	}
@@ -515,20 +514,35 @@ std::uint8_t Ppu::readRegister(std::uint16_t reg) {
 		// on the losing side of all three: whatever the flag reads back as, the
 		// interrupt does not happen. Games that poll $2002 for vblank instead
 		// of using the NMI are unaffected, which is why so few notice.
-		if (m_scanline == VBLANK_SCANLINE && m_dot == 0) {
-			// One dot early: the flag has not come up yet, and now it never
-			// will. tick() sees this and skips the whole thing.
-			m_suppressVblank = true;
-			m_vblankRaces++;
-		} else if (m_dotsSinceVblank == 0) {
+		//
+		// Which three dots, and what each does, is measured rather than
+		// reasoned: blargg's 02-vbl_set_time and 06-suppression print a row per
+		// dot, and the shape they demand is one dot where the flag is lost and
+		// three where the interrupt is. A read one dot *before* the flag is due
+		// is entirely ordinary -- an earlier version of this cancelled that one
+		// too, which cost the row those tests print first.
+		// The other end of vblank has its own one-dot asymmetry, and it is a
+		// readback rather than a state change: the flag is down, but a read
+		// landing on the very dot it went down still comes away with it set.
+		// Only what this read returns is affected -- the flag really is gone,
+		// which is why enabling NMI on that dot raises nothing (07-nmi_on_timing
+		// checks that, and moving the clear itself instead of the readback is
+		// what broke it).
+		if (m_dotsSinceVblankEnd == 0)
+			status |= STATUS_VBLANK;
+
+		if (m_dotsSinceVblank == 0) {
 			// The same dot. The read and the flag collide, and the read comes
-			// away with nothing -- bit 7 clear, no interrupt.
+			// away with nothing -- bit 7 clear, no interrupt, and the flag is
+			// gone for the frame.
 			status &= static_cast<std::uint8_t>(~STATUS_VBLANK);
 			m_nmiPending = false;
 			m_vblankRaces++;
-		} else if (m_dotsSinceVblank == 1) {
-			// One dot late: the flag is genuinely up and reads back set, but
-			// clearing it here pulls /NMI up again before the CPU sampled it.
+		} else if (m_dotsSinceVblank < VBLANK_RACE_DOTS) {
+			// A dot or two late: the flag is genuinely up and reads back set,
+			// but clearing it here pulls /NMI up again before the CPU sampled
+			// it. The interrupt is lost and the read looks perfectly normal,
+			// which is what makes this worth modelling at all.
 			m_nmiPending = false;
 			m_vblankRaces++;
 		}

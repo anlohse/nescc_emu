@@ -244,7 +244,7 @@ private:
 	int m_nmiDelay;
 
 	int m_dotsSinceVblank;      // capped; large means "not near the boundary"
-	bool m_suppressVblank;      // a read got in first; the flag must not come up
+	int m_dotsSinceVblankEnd;   // the same, for the dot the flag goes back down
 	unsigned long m_vblankRaces;
 
 	// PPU address line A12, which is a real wire and the only thing an MMC3

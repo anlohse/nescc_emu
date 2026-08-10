@@ -283,16 +283,40 @@ Roughly in order of how likely a real game is to notice:
   it was wrong in the same direction as the code, which is the failure mode these ROMs
   exist to catch. **43 of 93 pass.**
 
-  The six that remain in that cluster all measure one thing from different angles:
-  *which CPU cycle a PPU register access belongs to*. The bus advances the PPU a whole
-  cycle -- three dots -- before serving an access, so every access is dated up to three
-  dots late. Testing that is a change to when every device sees every access, not a
-  patch to any one ROM, and it wants its own sitting.
+  Three more of that cluster fell once I stopped guessing and **read blargg's own
+  readme**, which prints the expected table for every one of these ROMs. Two hypotheses
+  died first, both cheaply, and both worth recording because each would have been a
+  plausible thing to "fix" blind:
 
-  One dead end worth recording: `10-even_odd_timing` reports the odd-frame skip as
-  decided too late, and latching the rendering flag a dot earlier changed nothing it
-  measures. That change was reverted rather than kept -- an unproven behavioural change
-  that does not fix its test is worse than none.
+  - *The CPU/PPU phase.* A real console fixes it at power-on and the PPU can start 0, 1
+    or 2 dots into a CPU cycle. Sweeping all three changed nothing -- not the counts,
+    not even `05-nmi_timing`'s checksum. These ROMs synchronise to vblank by polling
+    `$2002` before measuring anything, so a constant offset is absorbed by the sync.
+    They are built to be immune to exactly that.
+  - *Accesses dated three dots late.* The core charges an instruction's cycles in one
+    lump at the end, so the PPU's position within an instruction comes entirely from the
+    bus. For a four-cycle, four-access instruction like the `LDA $2002` these ROMs use,
+    accesses and cycles line up exactly.
+
+  What the tables actually asked for was a redistribution, not a shift. **The flag has a
+  one-dot window at each end where a read wins**, and they are different mechanisms: at
+  the top of vblank a read on the set dot cancels the flag outright, and the interrupt
+  is lost for *three* dots rather than two; at the bottom the flag is genuinely down but
+  a read landing on that dot still returns it set. Moving the clear itself instead of
+  the readback made `03-vbl_clear_time` pass and broke `07-nmi_on_timing`, which is what
+  told them apart -- enabling NMI on that dot must raise nothing.
+
+  A unit test here had encoded the old window, including a read one dot *before* the
+  flag being suppressed, which blargg says is an entirely ordinary read.
+
+  One dead end: `10-even_odd_timing` reports the odd-frame skip as decided too late, and
+  latching the rendering flag a dot earlier changed nothing it measures. Reverted rather
+  than kept -- an unproven behavioural change that does not fix its test is worse than
+  none.
+
+  **46 of 93 pass.** What is left of this cluster is `05-nmi_timing` and
+  `08-nmi_off_timing`, which are about which CPU cycle the interrupt is taken on rather
+  than which dot the flag moves, and the odd-frame skip.
 
   The other large cluster is interrupt latency inside the CPU core (5 ROMs).
 - ~~**Bus conflicts** on UxROM and CNROM~~ — done, driven by the NES 2.0 submapper

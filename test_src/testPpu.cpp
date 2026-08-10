@@ -582,28 +582,40 @@ void runVblankRace(int dotsAway, bool* flagSet, bool* nmiTaken) {
 TEST_CASE("reading_2002_as_vblank_is_raised_loses_the_interrupt") {
 	bool flag = false, nmi = false;
 
-	// Two dots before the read: clear of the race entirely. This is the control
-	// -- everything below differs from it by one or two dots.
-	runVblankRace(10, &flag, &nmi);
+	// The shape below is blargg's, from 02-vbl_set_time and 06-suppression:
+	// one dot where the read costs the *flag*, three where it costs the
+	// interrupt, and nothing unusual on either side of those. An earlier
+	// version of this suppressed a read one dot *before* the flag was due as
+	// well, which those ROMs say is an entirely ordinary read.
+
+	// Three dots after the flag went up: past the window, and the control. A
+	// smaller delay here reads later, so this is the first read that is clear
+	// of the race on that side.
+	runVblankRace(9, &flag, &nmi);
 	CHECK(flag);
 	CHECK(nmi);
 
-	// One dot before the read. The flag is genuinely up and reads back set, but
-	// clearing it pulls /NMI up again before the CPU sampled it.
+	// Two dots after, and one dot after. The flag reads back set both times,
+	// but clearing it pulls /NMI up again before the CPU ever sampled it.
+	runVblankRace(10, &flag, &nmi);
+	CHECK(flag);
+	CHECK_FALSE(nmi);
+
 	runVblankRace(11, &flag, &nmi);
 	CHECK(flag);
 	CHECK_FALSE(nmi);
 
 	// The same dot. The read and the flag collide and the read comes away with
-	// nothing at all.
+	// nothing at all -- the one dot where the flag itself is lost.
 	runVblankRace(12, &flag, &nmi);
 	CHECK_FALSE(flag);
 	CHECK_FALSE(nmi);
 
-	// One dot early: the flag has not come up yet, and now it never will.
+	// A dot earlier still, before the flag is due: perfectly ordinary. The read
+	// finds nothing because there is nothing yet, and the interrupt follows.
 	runVblankRace(13, &flag, &nmi);
 	CHECK_FALSE(flag);
-	CHECK_FALSE(nmi);
+	CHECK(nmi);
 
 	// Well clear on the other side: an ordinary frame, nothing suppressed.
 	runVblankRace(22, &flag, &nmi);
