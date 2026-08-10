@@ -69,6 +69,24 @@ public:
 	void setRegion(Region region);
 	Region region() const { return m_region; }
 
+	/**
+	 * The switch at the back: everything zeroed, and $4017 written with $00.
+	 *
+	 * Separate from reset() because the 2A03 does not treat them alike, and
+	 * blargg's apu_reset suite tests the difference. What a power-up does and a
+	 * reset does not is choose the frame counter's mode -- at power the chip
+	 * behaves as though a game had written $00 there, which selects the
+	 * four-step sequence and leaves the frame interrupt *enabled*.
+	 */
+	void powerOn();
+
+	/**
+	 * The button on the front: the channels fall silent, $4017 does not move.
+	 *
+	 * The mode and the interrupt-inhibit bit survive, because reset does not
+	 * write $4017 -- a game that chose the five-step sequence before a reset
+	 * still has it afterwards.
+	 */
 	void reset();
 
 	/** Advance by @p cycles CPU cycles, generating one sample per cycle. */

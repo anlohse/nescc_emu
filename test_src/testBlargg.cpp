@@ -115,7 +115,12 @@ Outcome run(const std::string& path, std::string* error) {
 	nes::Nes console;
 	if (!console.loadRom(path, error))
 		return outcome;
-	console.reset();
+	// A power-up, not a reset. They are different switches and this suite has a
+	// whole directory devoted to the difference -- apu_reset's ROMs run once from
+	// cold, ask for a reset through the shell, and check what survived it. Coming
+	// up with reset() means the cold half never happens, and the APU never gets
+	// the $4017 = $00 that only a power-up performs.
+	console.powerOn();
 
 	bool sawShell = false;
 	bool justReset = false;
@@ -279,11 +284,14 @@ const Known KNOWN_FAILURES[] = {
 	// analogue behaviour of a bus nobody designed to do this.
 	{ "instr_test-v5/07-abs_xy", "SYA and SXA do not model the page-cross case" },
 
-	// The APU at power and at reset. The frame interrupt deliberately powers up
-	// inhibited here because a game needed it -- these ROMs are the evidence
-	// that was the wrong fix for whatever the real problem was.
-	{ "apu_reset/4017_written",     "$4017 is not written with $00 at power" },
-	{ "apu_reset/4017_timing",      "frame IRQ flag is set too late after reset" },
+	// The APU at power and at reset. Power and reset are now separate -- and the
+	// harness starts with a power-up rather than a reset, which it had wrong --
+	// but the two timing ROMs still fail and the reasons have moved on rather
+	// than gone away. Both now find the frame interrupt where they expect no
+	// interrupt at all yet, so what is left is *when* the sequencer starts
+	// counting from, not whether it is running.
+	{ "apu_reset/4017_written",     "the frame sequencer's phase at power" },
+	{ "apu_reset/4017_timing",      "the frame IRQ arrives 4 cycles late from cold" },
 	{ "apu_reset/len_ctrs_enabled", "length counters are not enabled at reset" },
 
 	// Two smaller ones, each a piece of hardware that decays or corrupts in a

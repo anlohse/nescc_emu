@@ -217,10 +217,10 @@ Apu::Apu() : m_bus(nullptr), m_pulse1(), m_pulse2(), m_triangle(), m_noise(),
 		m_generateSamples(false), m_samples() {
 	m_pulse1.onesComplement = true;
 	setRegion(Region::Ntsc);
-	reset();
+	powerOn();
 }
 
-void Apu::reset() {
+void Apu::powerOn() {
 	Bus* bus = m_bus;
 	const bool generate = m_generateSamples;
 
@@ -233,23 +233,23 @@ void Apu::reset() {
 
 	m_bus = bus;
 	m_generateSamples = generate;
-	m_frameCounter = 0;
+
+	// $4017 = $00: the four-step sequence, and the frame interrupt enabled.
+	//
+	// This used to power up inhibited instead, as a deliberate deviation, because
+	// the documented state silenced Ikinari Musician completely -- the interrupt
+	// asserted, was never acknowledged, and its handler ran about a hundred times
+	// a frame writing $4015 = 0.
+	//
+	// That is no longer true, and it was measured rather than assumed: the game
+	// now plays identically either way, to the same peak and the same RMS over
+	// eleven seconds. Something in the interrupt-latency work fixed whatever the
+	// real fault was, and the workaround outlived it -- while costing two of
+	// blargg's apu_reset ROMs the whole time.
 	m_frameMode = 4;
-	// Inhibited until the game asks for it, which is a deliberate deviation
-	// from the documented power-up state of $4017 = $00.
-	//
-	// A game that wants the frame interrupt has to write $4017 anyway: that is
-	// the only way to choose the four- or five-step sequence and the only way to
-	// know the sequencer's phase. A game that never writes it has expressed no
-	// intent to use the interrupt -- and cannot have, since it could not know
-	// when the first one would arrive.
-	//
-	// Powering up with it enabled instead silences Ikinari Musician completely.
-	// That game never writes $4017 and never reads $4015, so the frame interrupt
-	// asserts and is never acknowledged; its handler then runs about 113 times a
-	// frame, and that handler writes $4015 = 0, which turns every channel off. A
-	// music program with no sound.
-	m_frameIrqInhibit = true;
+	m_frameIrqInhibit = false;
+
+	m_frameCounter = 0;
 	m_frameIrq = false;
 	m_dmcIrq = false;
 	m_frameResetDelay = 0;
@@ -259,6 +259,18 @@ void Apu::reset() {
 	m_hpPrevOut = 0.0f;
 	m_lpPrev = 0.0f;
 	m_samples.clear();
+}
+
+void Apu::reset() {
+	// Everything a power-up does, except choose the frame counter's mode: reset
+	// does not write $4017, so whatever a game put there survives.
+	const int mode = m_frameMode;
+	const bool inhibit = m_frameIrqInhibit;
+
+	powerOn();
+
+	m_frameMode = mode;
+	m_frameIrqInhibit = inhibit;
 }
 
 void Apu::setSampleOutput(bool enabled) {

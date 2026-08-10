@@ -126,28 +126,50 @@ TEST_CASE("a_disabled_channel_ignores_length_writes") {
 /* Frame counter                                                             */
 /* ------------------------------------------------------------------------ */
 
-TEST_CASE("a_game_that_never_writes_4017_gets_no_frame_irq") {
-	// A deliberate deviation from the documented power-up state, and the reason
-	// is a real game: Ikinari Musician never writes $4017 and never reads
-	// $4015, so an interrupt enabled at power-up is asserted forever. Its
-	// handler runs about 113 times a frame and writes $4015 = 0 every time,
-	// turning off every channel -- a music program with no sound.
+TEST_CASE("a_game_that_never_writes_4017_still_gets_a_frame_irq") {
+	// Powering up is as though a game had written $00 to $4017: the four-step
+	// sequence, and the frame interrupt *enabled*. One arrives whether anybody
+	// asked for it or not.
 	//
-	// Writing $4017 is the only way to select the sequence or know its phase,
-	// so a game that never writes it cannot be relying on the interrupt.
+	// This asserted the opposite for a long time, as a deliberate deviation,
+	// because the documented state silenced Ikinari Musician completely -- the
+	// interrupt asserted, was never acknowledged, and its handler ran about a
+	// hundred times a frame writing $4015 = 0. That is no longer true and it was
+	// measured rather than assumed: the game plays to the same peak and the same
+	// RMS over eleven seconds either way. The workaround outlived the fault, and
+	// cost two of blargg's apu_reset ROMs the whole time.
 	Apu apu;
-	apu.tick(FULL_SEQUENCE * 4);
-	CHECK_FALSE(apu.irqAsserted());
-	CHECK_EQ(apu.peekStatus() & Apu::STATUS_FRAME_IRQ, 0);
+	apu.tick(FULL_SEQUENCE + 10);
+	CHECK(apu.irqAsserted());
+	CHECK((apu.peekStatus() & Apu::STATUS_FRAME_IRQ) != 0);
 }
 
-TEST_CASE("writing_4017_with_the_inhibit_clear_turns_the_irq_on") {
-	// The other half of the deviation: asking for it still works.
+TEST_CASE("the_inhibit_bit_turns_the_frame_irq_off_and_on_again") {
 	Apu apu;
+	apu.writeRegister(0x4017, 0x40);          // 4-step, interrupt inhibited
+	apu.tick(4);                              // let the write's delay expire
 	apu.tick(FULL_SEQUENCE * 2);
-	REQUIRE_FALSE(apu.irqAsserted());
+	CHECK_FALSE(apu.irqAsserted());
 
-	apu.writeRegister(0x4017, 0x00);
+	apu.writeRegister(0x4017, 0x00);          // and asked for again
+	apu.tick(4);
+	apu.tick(FULL_SEQUENCE + 10);
+	CHECK(apu.irqAsserted());
+}
+
+TEST_CASE("a_reset_leaves_4017_alone_where_a_power_up_writes_it") {
+	// The difference the split exists for. Reset asserts a pin; it does not write
+	// $4017, so a game that inhibited the interrupt before one still has it
+	// inhibited afterwards. A power-up is the other switch and does write it.
+	Apu apu;
+	apu.writeRegister(0x4017, 0x40);          // 4-step, interrupt inhibited
+	apu.tick(4);
+
+	apu.reset();
+	apu.tick(FULL_SEQUENCE * 2);
+	CHECK_FALSE(apu.irqAsserted());
+
+	apu.powerOn();
 	apu.tick(FULL_SEQUENCE + 10);
 	CHECK(apu.irqAsserted());
 }
