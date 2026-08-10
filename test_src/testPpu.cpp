@@ -505,6 +505,39 @@ TEST_CASE("eight_sprites_on_a_line_can_still_set_the_overflow_flag") {
 	CHECK((ppu.peekRegister(2) & Ppu::STATUS_OVERFLOW) != 0);
 }
 
+TEST_CASE("the_overflow_flag_appears_partway_along_the_previous_line") {
+	// Where the flag appears is behaviour too, because games poll for it. The
+	// evaluation that decides a line's sprites runs on the line *before* it,
+	// across dots 65 to 256, at two dots per OAM byte -- so the flag arrives
+	// partway along a line rather than when the line it describes is drawn.
+	//
+	// Which line, though, is the part worth being careful about. Sprites at Y = 5
+	// cover scanlines 6 to 13, so this arrangement trips the flag for every one of
+	// them, and what is observable is the *first*: the evaluation on line 5, for
+	// line 6. An earlier version of this test looked at line 9 and found the flag
+	// already up, which is right and was the test's mistake.
+	//
+	// The dot is arithmetic rather than a magic number. Eight in-range sprites cost
+	// four OAM bytes each as they are copied (32), slot 8's Y coordinate is one
+	// more read (33), and slot 9's tile number -- read as a Y, which is the bug --
+	// is the one that trips it (34). Two dots each from dot 65 puts it at 133.
+	auto cart = makeCart();
+	Ppu ppu(cart.get());
+
+	clearOam(ppu, 200);
+	for (int i = 0; i < 8; i++)
+		putSprite(ppu, i, 5, 1, 0, 0);
+	putSprite(ppu, 8, 200, 200, 200, 200);
+	putSprite(ppu, 9, 200, 5, 200, 200);
+
+	ppu.writeRegister(1, Ppu::MASK_SHOW_BACKGROUND | Ppu::MASK_SHOW_SPRITES);
+
+	ppu.tick(dotsTo(5, 132));
+	CHECK_EQ(ppu.peekRegister(2) & Ppu::STATUS_OVERFLOW, 0);
+	ppu.tick(1);
+	CHECK((ppu.peekRegister(2) & Ppu::STATUS_OVERFLOW) != 0);
+}
+
 TEST_CASE("sprite_zero_hit_is_reported_when_it_overlaps_the_background") {
 	auto cart = makeCart();
 	Ppu ppu(cart.get());

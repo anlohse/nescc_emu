@@ -173,15 +173,23 @@ private:
 	void renderScanline(int line, int fromX = 0);
 
 	/**
-	 * Whether $2002's overflow bit should be set for @p line.
+	 * When $2002's overflow bit should be set for @p line, or -1 for never.
 	 *
 	 * Not a count of sprites. The hardware walks OAM with a sprite index and a
 	 * byte index, and once eight sprites are in range the two stop advancing
 	 * together -- so it starts testing tile numbers, attributes and X positions
 	 * against the scanline as though they were Y coordinates. That is the overflow
 	 * bug, and it produces false negatives as readily as false positives.
+	 *
+	 * @return the dot, on the line *before* @p line, at which the flag appears.
+	 *         The evaluation runs there rather than on the line it describes, two
+	 *         dots per OAM byte, so how far into OAM the offending byte sits
+	 *         decides when a game polling $2002 can see it.
 	 */
-	bool evaluateSpriteOverflow(int line, int height) const;
+	int overflowDotFor(int line, int height) const;
+
+	/** Dot 65: where sprite evaluation begins, dots 1-64 being the OAM clear. */
+	static const int SPRITE_EVAL_FIRST_DOT = 65;
 
 	/** Redraw the rest of the current line, if a write just changed how it looks. */
 	void redrawRestOfLine();
@@ -286,6 +294,13 @@ private:
 	// -1. The flag is raised when the counter reaches it rather than when the
 	// line is drawn, because games poll for it and then change scroll mid-frame.
 	int m_sprite0HitDot;
+	/**
+	 * The dot on this line at which the overflow flag appears, or -1.
+	 *
+	 * Worked out at dot 65, when the evaluation the hardware runs there begins,
+	 * and for the *next* line -- which is the line that evaluation describes.
+	 */
+	int m_overflowDot;
 };
 
 } // namespace nes

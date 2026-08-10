@@ -83,6 +83,7 @@ void Ppu::reset() {
 	m_nmiPending = false;
 	m_nmiDelay = 0;
 	m_sprite0HitDot = -1;
+	m_overflowDot = -1;
 	m_dotsSinceVblank = VBLANK_RACE_DOTS;
 	m_dotsSinceVblankEnd = VBLANK_RACE_DOTS;
 	m_vblankRaces = 0;
@@ -145,6 +146,21 @@ void Ppu::tickOne() {
 	if (visible && m_sprite0HitDot >= 0 && m_dot >= m_sprite0HitDot + 1) {
 		m_status |= STATUS_SPRITE0;
 		m_sprite0HitDot = -1;
+	}
+
+	// Sprite overflow, on the same principle and for the same reason: games poll
+	// $2002 for it, so *when* it appears is part of the behaviour. The evaluation
+	// that decides it runs here, on the line before the one it describes, so this
+	// is worked out at dot 65 for m_scanline + 1 and raised part-way along.
+	if (renderingEnabled() && (visible || preRender)) {
+		if (m_dot == SPRITE_EVAL_FIRST_DOT) {
+			const int height = (m_ctrl & CTRL_SPRITE_SIZE_16) ? 16 : 8;
+			m_overflowDot = overflowDotFor(m_scanline + 1, height);
+		}
+		if (m_overflowDot >= 0 && m_dot >= m_overflowDot) {
+			m_status |= STATUS_OVERFLOW;
+			m_overflowDot = -1;
+		}
 	}
 
 	if (renderingEnabled() && (visible || preRender)) {
@@ -284,7 +300,7 @@ void Ppu::updateA12() {
 /* Rendering                                                                  */
 /* ------------------------------------------------------------------------- */
 
-bool Ppu::evaluateSpriteOverflow(int line, int height) const {
+int Ppu::overflowDotFor(int line, int height) const {
 	// $2002 bit 5, and it is not "were there more than eight sprites". The
 	// hardware walks OAM with two indices -- n for the sprite, m for the byte
 	// within it -- and once eight sprites are in range it stops incrementing them
@@ -299,11 +315,19 @@ bool Ppu::evaluateSpriteOverflow(int line, int height) const {
 	// interesting case wrong, which is exactly the shape of blargg's results --
 	// 5.Emulator passed, because it tests what an emulator gets right by accident,
 	// while Basics, Details, Timing and Obscure all failed.
+	// And the dot it lands on is the other half of the story. The evaluation is not
+	// instantaneous: it walks OAM across dots 65 to 256 of the line *before* the
+	// one being evaluated, two dots per byte -- a read on the odd dot, a write to
+	// the secondary OAM on the even one. So the flag appears partway along a line,
+	// at a moment that depends on how far into OAM the offending byte sits, and a
+	// game polling $2002 can tell.
 	int n = 0;                 // which sprite
 	int m = 0;                 // which byte of it, and the source of the trouble
 	int found = 0;
+	int bytes = 0;             // OAM bytes read, which is what the clock counts
 
 	while (n < 64) {
+		bytes++;
 		// Sprite data is delayed a scanline, so OAM holds top - 1. Same
 		// convention as the renderer above, deliberately: these two have to agree
 		// about what "in range" means or the flag contradicts the picture.
@@ -314,19 +338,21 @@ bool Ppu::evaluateSpriteOverflow(int line, int height) const {
 			// Still filling the eight slots. m is zero throughout this phase --
 			// copying a sprite walks m through 1, 2, 3 and back to 0 -- so this
 			// really is reading a Y coordinate.
-			if (inRange)
+			if (inRange) {
 				found++;
+				bytes += 3;    // and the other three bytes get copied too
+			}
 			n++;
 			continue;
 		}
 
 		// Eight found. Now the reads go wrong.
 		if (inRange)
-			return true;
+			return SPRITE_EVAL_FIRST_DOT + 2 * bytes;
 		n++;
 		m = (m + 1) & 3;       // and no carry into n, which is the bug
 	}
-	return false;
+	return -1;
 }
 
 void Ppu::renderScanline(int line, int fromX) {
@@ -383,7 +409,9 @@ void Ppu::renderScanline(int line, int fromX) {
 				bgPattern[x] = 0;
 	}
 
-	/* -- see evaluateSpriteOverflow below for why the flag is not a count -- */
+	// The overflow flag is not decided here. It belongs to the evaluation the
+	// hardware runs on the *previous* line, so tickOne() raises it at the dot that
+	// evaluation reaches -- see overflowDotFor.
 
 	// Sprites are evaluated once per line and do not move partway across it:
 	// hardware picks them during the previous line and latches their patterns,
@@ -398,16 +426,6 @@ void Ppu::renderScanline(int line, int fromX) {
 		m_sprAttribute.fill(0);
 		m_sprBehind.fill(false);
 		m_sprIsZero.fill(false);
-	}
-
-	// The overflow flag is the hardware's own evaluation and not a count, so it is
-	// worked out separately -- and it happens whenever *rendering* is on, not only
-	// when sprites are being shown, because the evaluation is what runs and it
-	// does not consult the sprite-enable bit.
-	if (wholeLine && renderingEnabled()) {
-		const int height = (m_ctrl & CTRL_SPRITE_SIZE_16) ? 16 : 8;
-		if (evaluateSpriteOverflow(line, height))
-			m_status |= STATUS_OVERFLOW;
 	}
 
 	if (wholeLine && (m_mask & MASK_SHOW_SPRITES)) {
@@ -842,6 +860,7 @@ void Ppu::serialize(State& state) {
 	state.value(m_nmiPending);
 	state.value(m_nmiDelay);
 	state.value(m_sprite0HitDot);
+	state.value(m_overflowDot);
 	state.value(m_dotsSinceVblank);
 	state.value(m_dotsSinceVblankEnd);
 	state.value(m_vblankRaces);

@@ -413,8 +413,9 @@ const Known KNOWN_FAILURES[] = {
 	// emulator gets right by accident. The other four check the hardware's actual
 	// sprite evaluation -- which reads OAM in a particular order, at particular
 	// dots, and famously goes wrong in a way the real chip reproduces exactly.
+	// Was failing at #5 and now fails at #7, so the evaluation got further before
+	// disagreeing. What is left is finer than the walk itself.
 	{ "sprite_overflow_tests/2.Details", "sprite overflow ignores the evaluation order" },
-	{ "sprite_overflow_tests/3.Timing",  "sprite overflow is set at the wrong dot" },
 	// This one's verdict comes out as "S PA SED", and the cause is not a sprite
 	// problem or a lost write. A trace shows the third character going to $30C0
 	// rather than $20C4 -- which mirrors onto column 0 -- because rendering had
@@ -423,10 +424,13 @@ const Known KNOWN_FAILURES[] = {
 	//
 	// It is writing during rendering because its print routine overran vblank: the
 	// title prints cleanly on lines 249-254 and the verdict starts at line 261.
-	// Being late is the actual fault, and the flag timing 3.Timing complains about
-	// is the likeliest reason -- this ROM polls $2002. So the word being mangled
-	// may well be "PASSED", and this entry probably clears when that one does.
-	{ "sprite_overflow_tests/4.Obscure", "its print overruns vblank, most likely waiting on the flag" },
+	// Being late is the actual fault.
+	//
+	// The flag's dot timing was the suspect, since this ROM polls $2002 -- and that
+	// guess was tested and was wrong. 3.Timing passes now and this one still prints
+	// "S PA SED", unchanged. So something else keeps it late, and the prediction is
+	// recorded as refuted rather than quietly dropped.
+	{ "sprite_overflow_tests/4.Obscure", "its print overruns vblank, for a reason still unknown" },
 
 	// The older vblank suite, also newly visible. Its first five pass; these two
 	// are the same NMI-edge story as ppu_vbl_nmi's, from a different angle.

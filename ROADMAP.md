@@ -447,11 +447,26 @@ Roughly in order of how likely a real game is to notice:
 
   Which makes the corruption a *symptom* of flag timing rather than a second defect, and
   collapses two roadmap items into one.
-- **Set the overflow flag at the dot the evaluation reaches it.** The value is right now;
-  the timing is not. The flag is raised while the line is drawn, where the hardware raises it
-  during the evaluation that runs over dots 65 to 256 of the *previous* line, at whichever
-  dot the offending comparison happens. `3.Timing` measures that directly, and on the
-  evidence above `4.Obscure` depends on it as well.
+- ~~**Set the overflow flag at the dot the evaluation reaches it.**~~ Done. The flag was
+  raised while the line was drawn; the hardware raises it during the evaluation that runs
+  over dots 65 to 256 of the *previous* line, two dots per OAM byte, at whichever dot the
+  offending comparison falls on. So the dot is arithmetic: each in-range sprite costs four
+  bytes as it is copied, each rejected one costs a single Y read, and the flag lands at
+  `65 + 2 * bytes`. It follows the same pattern the sprite-zero hit already used, which was
+  the hint that this was the shape to reach for.
+
+  `sprite_overflow_tests/3.Timing` passes. **70 of 93.**
+
+  And the prediction that came with it was wrong, which is worth keeping. `4.Obscure` was
+  expected to clear at the same time, on the reasoning that its print routine overruns
+  vblank because it polls `$2002` for a flag that arrived late. `3.Timing` passes now and
+  `4.Obscure` prints `S PA SED` exactly as before, unchanged. Something else keeps it late.
+  Its entry says so rather than still pointing at the flag.
+
+  The unit test made the same mistake in miniature and is worth reading for it: sprites at
+  Y = 5 cover scanlines 6 to 13, so an arrangement that trips the flag trips it for every one
+  of them, and the first is what is observable. Aiming at line 9 found the flag already up --
+  correct behaviour, and the test's error.
 - **Poll interrupts within an instruction, in emu6502.** The core charges an instruction's
   cycles in one lump at the end, so an interrupt arriving partway through one cannot be
   seen. Root cause of all four `cpu_interrupts_v2` ROMs and a prerequisite for the three
