@@ -61,7 +61,7 @@ SDL_JoystickID instanceId(SDL_GameController* pad) {
 SdlVideo::SdlVideo(const nes_host* host) :
 		m_host(host), m_window(nullptr), m_renderer(nullptr), m_texture(nullptr),
 		m_width(0), m_height(0), m_logicalWidth(0), m_crt(false),
-		m_maskKind(CRT_SHADOW_MASK),
+		m_maskKind(CRT_SLOT_MASK),
 		m_mask(nullptr), m_maskWidth(0), m_maskHeight(0) {
 	// The console's fixed palette, pre-expanded with an opaque alpha.
 	const std::uint32_t* rgb = nes::Ppu::nesPaletteRgb();
@@ -110,7 +110,7 @@ bool SdlVideo::open(const VideoOptions& options, Error* error) {
 	// A plain "crt" from an older configuration means the television, which is
 	// both the default and what an NES was actually plugged into.
 	m_maskKind = (filter == "crt-monitor")
-			? CRT_APERTURE_GRILLE : CRT_SHADOW_MASK;
+			? CRT_APERTURE_GRILLE : CRT_SLOT_MASK;
 	m_logicalWidth = (setting("aspect", "square") == "tv") ? WIDE_WIDTH : m_width;
 
 	// The CRT style letterboxes for itself, because its mask has to land on whole
@@ -326,12 +326,12 @@ void SdlVideo::configure() {
 	fields[0].label = "Scaling";
 	fields[0].options.push_back("Sharp  (nearest neighbour)");
 	fields[0].options.push_back("Smooth  (linear)");
-	// Two CRTs, because they were two pieces of hardware. A television's shadow
-	// mask put its triads on a hexagonal lattice, so every other row of them sits
-	// half a pitch across -- a brick wall. A monitor's aperture grille ran its
-	// stripes straight down the tube.
-	fields[0].options.push_back("CRT television  (staggered triads)");
-	fields[0].options.push_back("CRT monitor  (aligned stripes)");
+	// Two CRTs, because they were two pieces of hardware. A television's slot mask
+	// broke each colour column into slots and put the bridges between them half a
+	// line from the neighbouring column's -- a brick wall on its side. A monitor's
+	// aperture grille ran its stripes unbroken down the tube.
+	fields[0].options.push_back("CRT television  (staggered slots)");
+	fields[0].options.push_back("CRT monitor  (unbroken stripes)");
 	const std::string filter = setting("filter", "sharp");
 	if (filter == "crt-monitor")
 		fields[0].selected = 3;

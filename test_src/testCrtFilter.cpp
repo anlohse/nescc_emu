@@ -64,113 +64,85 @@ TEST_CASE("the_stripes_repeat_every_three_output_pixels") {
 		CHECK_EQ(m[x], m[x + CRT_MASK_PITCH]);
 }
 
-TEST_CASE("a_shadow_mask_staggers_every_other_row_of_triads") {
-	// A television's triads sat on a hexagonal lattice, so a row of them is half a
-	// pitch across from the row above and back in step with the row above that.
-	// Close up that is a brick wall, and it is most of why a television did not
-	// look like a monitor showing the same picture.
-	const int height = CRT_MASK_ROW * 4;
+TEST_CASE("a_slot_mask_staggers_the_gaps_and_not_the_colours") {
+	// A television broke each colour column into slots and put the bridges between
+	// them half a slot from the neighbouring column's. That is a brick wall on its
+	// side: the columns stay in step and the *gaps* alternate.
+	//
+	// Which is the correction that matters here. Staggering the colours instead
+	// gives a plausible-looking lattice that no television ever had.
+	const int lines = 4;
+	const int height = lines * 3;
+	const int width = CRT_MASK_PITCH * 4;
 	const std::vector<std::uint32_t> m =
-			mask(CRT_MASK_PITCH * 2, height, 4, CRT_SHADOW_MASK);
-	const int pitch = CRT_MASK_PITCH * 2;         // the row stride, in pixels
-
-	// Rows are compared by their red channel alone, because the scanline dims all
-	// three together and would otherwise swamp the comparison.
-	auto sameStripes = [&](int rowA, int rowB) {
-		for (int x = 0; x < CRT_MASK_PITCH; x++) {
-			const int a = red(m[rowA * pitch + x]);
-			const int b = red(m[rowB * pitch + x]);
-			// Within a triad row every output row shares one phase, so the two
-			// scanline levels are the only difference: compare against the row's
-			// own maximum instead of against absolute values.
-			if (a != b)
-				return false;
-		}
-		return true;
-	};
-
-	// Row 0 and row CRT_MASK_ROW are in different triad rows and out of step;
-	// row 2 * CRT_MASK_ROW is back in step with row 0. Both comparisons are
-	// between rows at the same offset within their triad row, so the beam is
-	// identical for all three and only the phase can differ.
-	CHECK_FALSE(sameStripes(0, CRT_MASK_ROW));
-	CHECK(sameStripes(0, 2 * CRT_MASK_ROW));
-
-	// Half a pitch of three pixels is a pixel and a half, so a staggered pixel
-	// straddles two stripes and gets a share of each -- there is no whole channel
-	// anywhere in an offset row. That is the offset being exact rather than
-	// rounded to the nearest pixel.
-	int fullChannels = 0;
-	for (int x = 0; x < CRT_MASK_PITCH; x++) {
-		const std::uint32_t p = m[CRT_MASK_ROW * pitch + x];
-		if (red(p) == 255 || green(p) == 255 || blue(p) == 255)
-			fullChannels++;
-	}
-	CHECK_EQ(fullChannels, 0);
-}
-
-TEST_CASE("a_grille_is_the_same_mask_with_nothing_staggered") {
-	// The integration has to reproduce the aligned case exactly, not merely
-	// closely: with no offset every output pixel covers one whole stripe and no
-	// part of another, so one channel is full and two are not.
-	const std::vector<std::uint32_t> m =
-			mask(CRT_MASK_PITCH * 3, CRT_MASK_ROW * 3, 3, CRT_APERTURE_GRILLE);
-	const int pitch = CRT_MASK_PITCH * 3;
-
-	for (int y = 0; y < CRT_MASK_ROW * 3; y++) {
-		for (int x = 0; x < pitch; x += CRT_MASK_PITCH) {
-			CAPTURE(y);
-			CAPTURE(x);
-			// The full channel is whichever the column leads with, and the scanline
-			// scales all three, so the leading one is simply the largest.
-			const std::uint32_t p = m[y * pitch + x];
-			CHECK(red(p) > green(p));
-			CHECK_EQ(green(p), blue(p));
-		}
-	}
-
-	// And every row is in step with every other, which is the difference from a
-	// shadow mask stated directly.
-	for (int y = 1; y < CRT_MASK_ROW * 3; y++) {
-		const std::vector<std::uint32_t> row(m.begin() + y * pitch,
-				m.begin() + y * pitch + pitch);
-		CAPTURE(y);
-		// Same phase means the brightest column is the same column.
-		int brightestFirst = 0;
-		int brightestHere = 0;
-		for (int x = 1; x < CRT_MASK_PITCH; x++) {
-			if (red(m[x]) > red(m[brightestFirst]))
-				brightestFirst = x;
-			if (red(row[x]) > red(row[brightestHere]))
-				brightestHere = x;
-		}
-		CHECK_EQ(brightestFirst, brightestHere);
-	}
-}
-
-TEST_CASE("staggering_costs_no_light_at_all") {
-	// The property that makes the brick pattern usable. The three stripe coverages
-	// sum to one wherever the pixel is placed, so an offset row is exactly as
-	// bright as an aligned one -- if it were not, the lattice would show up as
-	// horizontal banding on every flat colour, which is the artefact the beam
-	// integration was already introduced to avoid.
-	const int height = CRT_MASK_ROW * 4;
-	const std::vector<std::uint32_t> grille = mask(9, height, 4, CRT_APERTURE_GRILLE);
-	const std::vector<std::uint32_t> shadow = mask(9, height, 4, CRT_SHADOW_MASK);
+			mask(width, height, lines, CRT_SLOT_MASK);
 
 	for (int y = 0; y < height; y++) {
-		double a = 0.0;
-		double b = 0.0;
-		for (int x = 0; x < 9; x++) {
-			a += red(grille[y * 9 + x]) + green(grille[y * 9 + x])
-					+ blue(grille[y * 9 + x]);
-			b += red(shadow[y * 9 + x]) + green(shadow[y * 9 + x])
-					+ blue(shadow[y * 9 + x]);
-		}
 		CAPTURE(y);
-		CHECK(b > a * 0.99);
-		CHECK(b < a * 1.01);
+		// Every triad column leads with red in its first pixel, green in its
+		// second, blue in its third -- exactly as a grille does. The scanline
+		// scales all three of a pixel's channels together, so whichever channel
+		// leads is simply the largest whatever the column's phase.
+		for (int x = 0; x < width; x += CRT_MASK_PITCH) {
+			CHECK(red(m[y * width + x]) > green(m[y * width + x]));
+			CHECK(green(m[y * width + x + 1]) > red(m[y * width + x + 1]));
+			CHECK(blue(m[y * width + x + 2]) > red(m[y * width + x + 2]));
+		}
 	}
+
+	// Neighbouring triad columns are out of step vertically, and columns two apart
+	// are back in step. Comparing the same channel of the same stripe position
+	// isolates the beam: only the slot phase can differ.
+	bool everDiffered = false;
+	for (int y = 0; y < height; y++) {
+		CAPTURE(y);
+		CHECK_EQ(red(m[y * width]), red(m[y * width + CRT_MASK_PITCH * 2]));
+		if (red(m[y * width]) != red(m[y * width + CRT_MASK_PITCH]))
+			everDiffered = true;
+	}
+	CHECK(everDiffered);
+}
+
+TEST_CASE("a_grille_leaves_every_column_in_step") {
+	// The difference from a slot mask, stated directly: an aperture grille's
+	// stripes run the whole height of the tube with nothing interrupting them, so
+	// every column has its dark bands in the same places.
+	const int lines = 4;
+	const int height = lines * 3;
+	const int width = CRT_MASK_PITCH * 4;
+	const std::vector<std::uint32_t> m =
+			mask(width, height, lines, CRT_APERTURE_GRILLE);
+
+	for (int y = 0; y < height; y++) {
+		CAPTURE(y);
+		for (int x = CRT_MASK_PITCH; x < width; x += CRT_MASK_PITCH)
+			CHECK_EQ(red(m[y * width + x]), red(m[y * width]));
+	}
+}
+
+TEST_CASE("staggering_the_slots_costs_no_light_at_all") {
+	// The property that makes the brick pattern usable, and it comes from the beam
+	// being integrated: shifting a periodic profile does not change what a whole
+	// period of it integrates to, so a staggered column is exactly as bright as an
+	// aligned one over any whole number of lines. If it were not, the lattice
+	// would show up as vertical banding on every flat colour -- the same artefact
+	// the integration was introduced to remove from the horizontal.
+	const int lines = 8;
+	const int height = lines * 3;
+	const int width = CRT_MASK_PITCH * 2;
+	const std::vector<std::uint32_t> m = mask(width, height, lines, CRT_SLOT_MASK);
+
+	// Down a whole column of each kind, one aligned and one staggered.
+	double alignedTotal = 0.0;
+	double staggeredTotal = 0.0;
+	for (int y = 0; y < height; y++) {
+		alignedTotal += luma(m[y * width]);
+		staggeredTotal += luma(m[y * width + CRT_MASK_PITCH]);
+	}
+	CAPTURE(alignedTotal);
+	CAPTURE(staggeredTotal);
+	CHECK(staggeredTotal > alignedTotal * 0.99);
+	CHECK(staggeredTotal < alignedTotal * 1.01);
 }
 
 TEST_CASE("the_mask_is_a_multiplier_so_nothing_in_it_exceeds_full") {

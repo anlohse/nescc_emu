@@ -41,7 +41,7 @@ that keeps the status bar fixed while the level moves beneath it all work.
 | Plugin chooser | `F1`, or `--settings` with no ROM: pick a plugin per job and the window size, saved to `nes.cfg` |
 | Rebinding | the controller plugin's own dialog: press Bind, then press the key or pad button |
 | Plugin settings | each plugin's own dialog — video's scaling style and pixel shape, audio's device, volume and buffer |
-| CRT style | a soft stretch, then a mask multiplied over it — a television's shadow mask or a monitor's grille |
+| CRT style | a soft stretch, then a mask multiplied over it — a television's slot mask or a monitor's grille |
 | Menu bar | native, on Windows: Emulation, State, Settings, Help — every item implemented |
 | Loading ROMs | from the menu or the command line; the window opens empty without one, and remembers the last eight |
 | Save states | eight slots beside the ROM, with the whole machine in them: RAM, both chips, the cartridge's registers, and where the beam is |
@@ -252,19 +252,30 @@ window.
 
 **A television and a monitor were different glass**, which is why both are offered rather
 than one being a "better CRT" setting. A monitor — and a Trinitron television — used an
-aperture grille: continuous vertical stripes, aligned all the way down the tube. Most
-televisions used a shadow mask with delta-gun triads on a hexagonal lattice, so every other
-row of triads sits *half a pitch across* from the row above. Close up that is a brick wall,
-and it is much of why a television never looked like a monitor showing the same picture.
+aperture grille: unbroken vertical stripes running the whole height of the tube. Most
+televisions used a *slot mask*, where the colour columns run straight down just the same
+but each is broken into short slots, and the bridges between one column's slots sit half a
+slot from its neighbour's:
 
-Half of a three-pixel pitch is a pixel and a half, which no shift of an index can express.
-So the stripes are integrated across each output pixel rather than sampled once in it —
-the same technique the beam already used vertically, applied to the other axis. With no
-offset that reproduces the aligned case exactly; with half a pitch of offset a pixel
-straddling two stripes gets a share of each, which is what a camera pointed at an offset
-triad row actually records. The three coverages always sum to one whatever the offset, so a
-staggered row costs no more light than an aligned one and the lattice never shows up as
-banding.
+```
+R  G  B    r  g  b
+R  G  B    R  G  B
+r  g  b    r  g  b
+```
+
+A brick wall stacked sideways — the colours stay in step and the *gaps* alternate. It is
+much of why a television never looked like a monitor showing the same picture.
+
+That costs nothing to add, because a slot's height is a scanline's height: the bridge is
+where the beam was already fading, so the stagger shifts the beam by half a line and needs
+no geometry of its own. The beam integral takes a position rather than an index, so half a
+line is no harder to ask for than a whole one. And shifting a periodic profile cannot change
+what a whole period of it integrates to, so a staggered column is exactly as bright as an
+aligned one — measured on screen, the two masks come out at 112.4 and 112.5 average luma.
+
+It also *reduces* the horizontal banding rather than adding any: alternating gaps break up
+the continuous dark rows a grille has, measuring 0.991 row-to-row uniformity against the
+grille's 0.968.
 
 Three things about it came out of measuring screenshots rather than from taste, and each
 one changed the design:

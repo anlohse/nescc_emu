@@ -531,25 +531,32 @@ ROM could only be opened from a command line.
      reads 3%.
 
    A second look at it produced the other half of the feature. A television and a monitor
-   were *different glass*: a monitor, and a Trinitron, used an aperture grille with
-   continuous aligned stripes, while most televisions used a shadow mask with delta-gun
-   triads on a hexagonal lattice -- every other row of triads half a pitch across from the
-   one above, which close up is a brick wall. So there are two CRT entries rather than one,
-   because neither is a better version of the other.
+   were *different glass*: a monitor, and a Trinitron, used an aperture grille with unbroken
+   stripes running the height of the tube, while most televisions used a slot mask, where
+   the colour columns run straight down just the same but each is broken into short slots
+   and the bridges between one column's slots sit half a slot from its neighbour's. A brick
+   wall stacked sideways. So there are two CRT entries rather than one, because neither is a
+   better version of the other.
 
-   Half of a three-pixel pitch is a pixel and a half, which no shift of an index can
-   express, and the answer was already in the file: stop point-sampling a hard edge and
-   integrate it, which is what the beam does vertically. Applied to the other axis it
-   reproduces the aligned case exactly at zero offset and splits a pixel's light between two
-   stripes at half a pitch -- which is what a camera pointed at an offset triad row records.
-   The three coverages sum to one whatever the offset, so staggering costs no light and the
-   lattice cannot band.
+   Getting there took a wrong turn worth recording, because the wrong version was plausible
+   enough to build, test and screenshot. The first attempt staggered the *colours*
+   horizontally -- delta-gun triads on a hexagonal lattice, which some televisions did use.
+   That needs half of a three-pixel pitch, a pixel and a half, which no shift of an index
+   can express; the answer was to integrate the stripes across each output pixel the way the
+   beam is integrated across each row, which works exactly but leaves staggered columns at
+   half the stripe contrast, because a pixel straddling two stripes gets half of each.
 
-   An integer one-pixel offset was tried and rejected, and it is the tempting option: a
-   third of the pitch keeps full stripe contrast on every row and the brick is far more
-   obvious, where an exact half leaves staggered rows at half contrast. But a third is a
-   diagonal lattice rather than a hexagonal one. The exact version is softer and less
-   screen-door, and that is what a television was.
+   A slot mask is both what was actually wanted and far less work. A slot's height is a
+   scanline's height -- the bridge is where the beam was already fading -- so the stagger
+   shifts the *beam* by half a line and needs no geometry at all. The beam integral takes a
+   position rather than an index, so it was already able to do this: the change deleted the
+   horizontal integration rather than adding anything.
+
+   Two things follow for free from it being a phase shift of a periodic profile. Shifting one
+   cannot change what a whole period integrates to, so a staggered column is exactly as
+   bright as an aligned one -- 112.4 against 112.5 average luma, measured on screen. And
+   alternating gaps break up the continuous dark rows a grille has, so the slot mask *bands
+   less* than the grille rather than more: 0.991 row-to-row uniformity against 0.968.
 
    The mask is a plain function with a test beside it, so where the stripes fall, whether a
    fractional scale bands, whether staggering costs light, and what the whole thing does to
