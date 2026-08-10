@@ -530,10 +530,31 @@ ROM could only be opened from a command line.
      phase to be wrong about and closed form costs two cosines: the same measurement now
      reads 3%.
 
+   A second look at it produced the other half of the feature. A television and a monitor
+   were *different glass*: a monitor, and a Trinitron, used an aperture grille with
+   continuous aligned stripes, while most televisions used a shadow mask with delta-gun
+   triads on a hexagonal lattice -- every other row of triads half a pitch across from the
+   one above, which close up is a brick wall. So there are two CRT entries rather than one,
+   because neither is a better version of the other.
+
+   Half of a three-pixel pitch is a pixel and a half, which no shift of an index can
+   express, and the answer was already in the file: stop point-sampling a hard edge and
+   integrate it, which is what the beam does vertically. Applied to the other axis it
+   reproduces the aligned case exactly at zero offset and splits a pixel's light between two
+   stripes at half a pitch -- which is what a camera pointed at an offset triad row records.
+   The three coverages sum to one whatever the offset, so staggering costs no light and the
+   lattice cannot band.
+
+   An integer one-pixel offset was tried and rejected, and it is the tempting option: a
+   third of the pitch keeps full stripe contrast on every row and the brick is far more
+   obvious, where an exact half leaves staggered rows at half contrast. But a third is a
+   diagonal lattice rather than a hexagonal one. The exact version is softer and less
+   screen-door, and that is what a television was.
+
    The mask is a plain function with a test beside it, so where the stripes fall, whether a
-   fractional scale bands, and what the whole thing costs in brightness and in hue are all
-   checked without a window. The hue test in particular exists because the screenshot
-   contradicted the design -- it is that measurement, written down.
+   fractional scale bands, whether staggering costs light, and what the whole thing does to
+   brightness and to hue are all checked without a window. The hue test in particular exists
+   because a screenshot contradicted the design -- it is that measurement, written down.
 
    One bug worth recording, because it was invisible in every screenshot: the light gun maps
    window pixels to console pixels by undoing the renderer's scale, and only the X axis was

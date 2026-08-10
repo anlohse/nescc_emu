@@ -14,6 +14,7 @@
 //
 
 #include "Backend.h"
+#include "CrtFilter.h"
 #include "../GuiConfig.h"
 #include "../plugin/nes_plugin.h"
 
@@ -82,6 +83,8 @@ private:
 	int m_logicalWidth;
 
 	bool m_crt;
+	/** Which screen the mask imitates: a television, or a monitor. */
+	CrtMaskKind m_maskKind;
 	/**
 	 * The mask, multiplied over the stretched picture.
 	 *

@@ -36,8 +36,43 @@
 
 namespace nesfe {
 
+/**
+ * Which screen the mask is imitating. They were different pieces of hardware.
+ *
+ * A monitor -- and a Trinitron television -- used an aperture grille: continuous
+ * vertical red, green and blue stripes, aligned all the way down the tube. Most
+ * televisions used a shadow mask with delta-gun dot triads on a hexagonal
+ * lattice, so each row of triads sits half a pitch across from the row above it.
+ * Close up that is a brick wall, and it is the reason a television never looked
+ * quite like a monitor showing the same picture.
+ */
+enum CrtMaskKind {
+	CRT_APERTURE_GRILLE,   /**< aligned stripes: a monitor, or a Trinitron */
+	CRT_SHADOW_MASK        /**< staggered triads: an ordinary television */
+};
+
 /** How many output pixels one red-green-blue triad of the mask spans. */
 const int CRT_MASK_PITCH = 3;
+
+/**
+ * How tall one row of triads is, in output pixels.
+ *
+ * In output pixels for the same reason the pitch is: the lattice was etched into
+ * a sheet of metal behind the glass and had no idea what resolution was being
+ * shown through it.
+ */
+const int CRT_MASK_ROW = 3;
+
+/**
+ * How far a shadow mask's triad row is shifted from the one above, in pitches.
+ *
+ * Half, which is what a hexagonal lattice means -- and half of a three-pixel
+ * pitch is a pixel and a half, which no integer shift can express. That is why
+ * the stripes are integrated across each output pixel rather than sampled once
+ * in it: a pixel straddling two stripes gets a share of each, which is exactly
+ * what a camera pointed at an offset triad row records.
+ */
+extern const float CRT_STAGGER;
 
 /** How much of the other two channels a stripe removes. 1.0 is pure separation. */
 extern const float CRT_STRIPE;
@@ -63,10 +98,12 @@ extern const float CRT_LIFT;
  *
  * @param sourceLines  how many lines the console drew, which is what sets the
  *                     scanline spacing -- 240 for the NES.
+ * @param kind         which screen to imitate.
  * @param out          width * height pixels of 0xAARRGGBB, to be multiplied
  *                     over the stretched picture.
  */
-void buildCrtMask(int width, int height, int sourceLines, std::uint32_t* out);
+void buildCrtMask(int width, int height, int sourceLines, CrtMaskKind kind,
+		std::uint32_t* out);
 
 /**
  * The console palette, lifted by CRT_LIFT, for use with the mask.

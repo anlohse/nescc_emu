@@ -61,6 +61,7 @@ SDL_JoystickID instanceId(SDL_GameController* pad) {
 SdlVideo::SdlVideo(const nes_host* host) :
 		m_host(host), m_window(nullptr), m_renderer(nullptr), m_texture(nullptr),
 		m_width(0), m_height(0), m_logicalWidth(0), m_crt(false),
+		m_maskKind(CRT_SHADOW_MASK),
 		m_mask(nullptr), m_maskWidth(0), m_maskHeight(0) {
 	// The console's fixed palette, pre-expanded with an opaque alpha.
 	const std::uint32_t* rgb = nes::Ppu::nesPaletteRgb();
@@ -105,7 +106,11 @@ bool SdlVideo::open(const VideoOptions& options, Error* error) {
 	// 292x240. Sharpness is a choice too -- these are 8x8 tiles, not
 	// photographs, and most people want to see them.
 	const std::string filter = setting("filter", "sharp");
-	m_crt = (filter == "crt");
+	m_crt = (filter.rfind("crt", 0) == 0);
+	// A plain "crt" from an older configuration means the television, which is
+	// both the default and what an NES was actually plugged into.
+	m_maskKind = (filter == "crt-monitor")
+			? CRT_APERTURE_GRILLE : CRT_SHADOW_MASK;
 	m_logicalWidth = (setting("aspect", "square") == "tv") ? WIDE_WIDTH : m_width;
 
 	// The CRT style letterboxes for itself, because its mask has to land on whole
@@ -198,7 +203,8 @@ void SdlVideo::ensureMask(const SDL_Rect& into) {
 
 	std::vector<std::uint32_t> pattern(
 			static_cast<std::size_t>(m_maskWidth) * m_maskHeight, 0);
-	buildCrtMask(m_maskWidth, m_maskHeight, m_height, pattern.data());
+	buildCrtMask(m_maskWidth, m_maskHeight, m_height, m_maskKind,
+			pattern.data());
 	SDL_UpdateTexture(m_mask, nullptr, pattern.data(),
 			m_maskWidth * static_cast<int>(sizeof(std::uint32_t)));
 	// Modulate: every channel of the picture is multiplied by the mask's. One
@@ -320,9 +326,19 @@ void SdlVideo::configure() {
 	fields[0].label = "Scaling";
 	fields[0].options.push_back("Sharp  (nearest neighbour)");
 	fields[0].options.push_back("Smooth  (linear)");
-	fields[0].options.push_back("CRT  (RGB stripes and scanlines)");
+	// Two CRTs, because they were two pieces of hardware. A television's shadow
+	// mask put its triads on a hexagonal lattice, so every other row of them sits
+	// half a pitch across -- a brick wall. A monitor's aperture grille ran its
+	// stripes straight down the tube.
+	fields[0].options.push_back("CRT television  (staggered triads)");
+	fields[0].options.push_back("CRT monitor  (aligned stripes)");
 	const std::string filter = setting("filter", "sharp");
-	fields[0].selected = (filter == "smooth") ? 1 : (filter == "crt" ? 2 : 0);
+	if (filter == "crt-monitor")
+		fields[0].selected = 3;
+	else if (filter.rfind("crt", 0) == 0)
+		fields[0].selected = 2;
+	else
+		fields[0].selected = (filter == "smooth") ? 1 : 0;
 
 	fields[1].label = "Pixel shape";
 	fields[1].options.push_back("Square  (256 x 240)");
@@ -340,8 +356,9 @@ void SdlVideo::configure() {
 			"Takes effect the next time the emulator starts."))
 		return;
 
-	putSetting("filter", fields[0].selected == 2 ? "crt"
-			: (fields[0].selected == 1 ? "smooth" : "sharp"));
+	static const char* const FILTERS[] =
+			{ "sharp", "smooth", "crt-tv", "crt-monitor" };
+	putSetting("filter", FILTERS[fields[0].selected & 3]);
 	putSetting("aspect", fields[1].selected == 1 ? "tv" : "square");
 }
 

@@ -41,7 +41,7 @@ that keeps the status bar fixed while the level moves beneath it all work.
 | Plugin chooser | `F1`, or `--settings` with no ROM: pick a plugin per job and the window size, saved to `nes.cfg` |
 | Rebinding | the controller plugin's own dialog: press Bind, then press the key or pad button |
 | Plugin settings | each plugin's own dialog — video's scaling style and pixel shape, audio's device, volume and buffer |
-| CRT style | a soft stretch, then an RGB stripe-and-scanline mask multiplied over it |
+| CRT style | a soft stretch, then a mask multiplied over it — a television's shadow mask or a monitor's grille |
 | Menu bar | native, on Windows: Emulation, State, Settings, Help — every item implemented |
 | Loading ROMs | from the menu or the command line; the window opens empty without one, and remembers the last eight |
 | Save states | eight slots beside the ROM, with the whole machine in them: RAM, both chips, the cartridge's registers, and where the beam is |
@@ -227,11 +227,11 @@ plugin owning its window: the alternative was an ABI call obliging every video p
 ever written to host a menu. And the window grows by exactly the menu's height, so the
 picture keeps the size that was asked for instead of losing a strip to it.
 
-**Scaling** offers Sharp, Smooth, or **CRT**, and the CRT style does two separate things in
-the order a television did them. First it stretches the picture with a linear filter,
-because nothing about a television was sharp — the beam was a spot with soft edges, the
-signal was bandwidth-limited, and the phosphor spread whatever light it got. Then it
-multiplies a mask over the result:
+**Scaling** offers Sharp, Smooth, **CRT television** and **CRT monitor**. The CRT styles do
+two separate things in the order a television did them. First they stretch the picture with
+a linear filter, because nothing about a television was sharp — the beam was a spot with
+soft edges, the signal was bandwidth-limited, and the phosphor spread whatever light it got.
+Then they multiply a mask over the result:
 
 ```
 [R  G  B ]
@@ -249,6 +249,22 @@ the glass, at a pitch that had nothing to do with what resolution was being disp
 the mask is built in output pixels. Scanlines are the other way round: they are in the
 *signal*, one per line the console drew, so their spacing follows 240 rather than the
 window.
+
+**A television and a monitor were different glass**, which is why both are offered rather
+than one being a "better CRT" setting. A monitor — and a Trinitron television — used an
+aperture grille: continuous vertical stripes, aligned all the way down the tube. Most
+televisions used a shadow mask with delta-gun triads on a hexagonal lattice, so every other
+row of triads sits *half a pitch across* from the row above. Close up that is a brick wall,
+and it is much of why a television never looked like a monitor showing the same picture.
+
+Half of a three-pixel pitch is a pixel and a half, which no shift of an index can express.
+So the stripes are integrated across each output pixel rather than sampled once in it —
+the same technique the beam already used vertically, applied to the other axis. With no
+offset that reproduces the aligned case exactly; with half a pitch of offset a pixel
+straddling two stripes gets a share of each, which is what a camera pointed at an offset
+triad row actually records. The three coverages always sum to one whatever the offset, so a
+staggered row costs no more light than an aligned one and the lattice never shows up as
+banding.
 
 Three things about it came out of measuring screenshots rather than from taste, and each
 one changed the design:

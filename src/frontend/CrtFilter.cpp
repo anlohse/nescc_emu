@@ -23,6 +23,20 @@ const float CRT_STRIPE = 0.28f;
 const float CRT_SCANLINE = 0.55f;
 const float CRT_LIFT = 0.80f;
 
+/*
+ * Half a pitch, because that is what a hexagonal lattice is -- not a number with
+ * any freedom in it.
+ *
+ * A third was tried and rejected, and the reason is worth recording because it
+ * is tempting. A third of three pixels is a whole pixel, so an offset row keeps
+ * full stripe contrast and the brick pattern is far more obvious; half of three
+ * is a pixel and a half, so a staggered pixel straddles two stripes, gets a
+ * share of each, and comes out at half the contrast. The obvious-looking one is
+ * the wrong lattice, and choosing between them is a matter of taste rather than
+ * of correctness -- this is the softer and more faithful of the two.
+ */
+const float CRT_STAGGER = 0.5f;
+
 namespace {
 
 inline std::uint8_t clamped(float value) {
@@ -46,6 +60,28 @@ inline std::uint8_t lifted(std::uint32_t channel) {
 const float PI = 3.14159265f;
 
 /**
+ * The running total of one phosphor stripe's width from zero to @p at.
+ *
+ * The stripe for a channel is a band one pixel wide repeating every pitch.
+ * Accumulating it in closed form is what lets a stripe be integrated across an
+ * output pixel rather than sampled once in it -- which is in turn what lets a
+ * shadow mask be offset by half a pitch, since half of three pixels is not a
+ * whole number of pixels and no shift of an index could express it.
+ */
+inline float stripeTotal(int channel, float at) {
+	const float pitch = static_cast<float>(CRT_MASK_PITCH);
+	const float whole = std::floor(at / pitch);
+	const float within = at - whole * pitch;              // 0 .. pitch
+	const float part = within - static_cast<float>(channel);
+	return whole + ((part < 0.0f) ? 0.0f : ((part > 1.0f) ? 1.0f : part));
+}
+
+/** How much of the output pixel spanning [from, to) one stripe covers. */
+inline float stripeCoverage(int channel, float from, float to) {
+	return stripeTotal(channel, to) - stripeTotal(channel, from);
+}
+
+/**
  * The running total of beam brightness from the top of line zero to @p lines.
  *
  * The profile is sin(pi * t) repeated once per line: brightest down the middle,
@@ -61,7 +97,8 @@ inline float beamTotal(float lines) {
 
 } // namespace
 
-void buildCrtMask(int width, int height, int sourceLines, std::uint32_t* out) {
+void buildCrtMask(int width, int height, int sourceLines, CrtMaskKind kind,
+		std::uint32_t* out) {
 	const float other = 1.0f - CRT_STRIPE;
 
 	// How many output rows one console line covers -- three at 3x, and something
@@ -85,19 +122,38 @@ void buildCrtMask(int width, int height, int sourceLines, std::uint32_t* out) {
 		// emulator rather than like a television. An integral over the row has no
 		// phase to be wrong about -- every line loses the same light whatever the
 		// scale -- and the closed form costs two cosines.
-		const float from = static_cast<float>(y) * linesPerRow;
-		const float to = from + linesPerRow;
-		const float beam = (beamTotal(to) - beamTotal(from)) / linesPerRow;
+		const float rowTop = static_cast<float>(y) * linesPerRow;
+		const float rowBottom = rowTop + linesPerRow;
+		const float beam =
+				(beamTotal(rowBottom) - beamTotal(rowTop)) / linesPerRow;
 		const float lineLevel = CRT_SCANLINE + (1.0f - CRT_SCANLINE) * beam;
 
+		// Which row of triads this output row falls in, and how far across that
+		// row is from the one above it. Every other row on a shadow mask, none of
+		// them on a grille.
+		const int triadRow = y / CRT_MASK_ROW;
+		const float shift = (kind == CRT_SHADOW_MASK && (triadRow & 1) != 0)
+				? CRT_STAGGER * static_cast<float>(CRT_MASK_PITCH)
+				: 0.0f;
+
 		for (int x = 0; x < width; x++) {
-			// The mask's own pitch, in screen pixels, with nothing to do with
-			// what resolution is being shown -- because on a television the
-			// stripes were in the glass.
-			const int stripe = x % CRT_MASK_PITCH;
-			const float r = (stripe == 0 ? 1.0f : other) * lineLevel;
-			const float g = (stripe == 1 ? 1.0f : other) * lineLevel;
-			const float b = (stripe == 2 ? 1.0f : other) * lineLevel;
+			// The stripes, integrated across the pixel rather than sampled in it.
+			// With no shift that comes out exactly as it would from an index --
+			// one channel full and two at `other` -- and with half a pitch of
+			// shift it comes out as two halves, because that is what the pixel is
+			// actually looking at.
+			//
+			// The three coverages always sum to one whatever the shift, so a
+			// staggered row costs no more light than an aligned one. That is what
+			// stops the brick pattern reading as horizontal banding.
+			const float from = static_cast<float>(x) + shift;
+			const float to = from + 1.0f;
+			const float r = (other + CRT_STRIPE * stripeCoverage(0, from, to))
+					* lineLevel;
+			const float g = (other + CRT_STRIPE * stripeCoverage(1, from, to))
+					* lineLevel;
+			const float b = (other + CRT_STRIPE * stripeCoverage(2, from, to))
+					* lineLevel;
 
 			out[y * width + x] = 0xFF000000u
 					| (static_cast<std::uint32_t>(multiplier(r)) << 16)
