@@ -45,8 +45,10 @@ std::vector<MenuSection> buildMenu(const MenuState& state) {
 	{
 		MenuSection s;
 		s.label = "&Emulation";
-		s.items.push_back(todo(MENU_LOAD_ROM, "&Load ROM...", "Ctrl+O"));
-		s.items.push_back(todo(MENU_CLOSE_ROM, "&Close ROM"));
+		// Loading needs a file picker, which not every platform has here yet.
+		s.items.push_back(entry(MENU_LOAD_ROM, "&Load ROM...", "Ctrl+O",
+				state.canPickFile));
+		s.items.push_back(entry(MENU_CLOSE_ROM, "&Close ROM", "", state.romLoaded));
 
 		// Recent ROMs earns its place only once loading exists; until then the
 		// list is empty and says so rather than pretending to be a menu.

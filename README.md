@@ -42,6 +42,7 @@ that keeps the status bar fixed while the level moves beneath it all work.
 | Rebinding | the controller plugin's own dialog: press Bind, then press the key or pad button |
 | Plugin settings | each plugin's own dialog — video's filter and pixel shape, audio's device, volume and buffer |
 | Menu bar | native, on Windows: Emulation, State, Settings, Help — with what is not built yet listed and disabled |
+| Loading ROMs | from the menu or the command line; the window opens empty without one, and remembers the last eight |
 | Host services | plugins read the frame, the window handle and their own settings through `nes_host` |
 | Window | `nes_gui`: SDL2 video and audio, keyboard, paced to NTSC's 60.0988 Hz |
 | Headless runner | `nes_run`: tracing, scripted input, PPM screenshots, WAV capture |
@@ -194,6 +195,17 @@ Names are SDL's own — `Right Shift`, `Keypad 8`, `dpup`, `leftshoulder` — be
 converts both directions, so the names it writes are exactly the names it reads back.
 A binding it does not recognise is reported and skipped rather than rejecting the file:
 one typo costs that binding, not the rest of your setup.
+
+**A ROM is no longer required to start.** With none named the window opens empty and says
+so, and one can be loaded from Emulation > Load ROM or from the list of the last eight.
+Naming one on the command line still works and still wins -- and a bad name there is
+still a failure to start rather than a silent empty window, because somebody who typed a
+path wants to hear that it was wrong.
+
+Loading is a cold boot, not a reset: a cartridge going into a slot does not inherit the
+RAM of the game that just left. It also re-times the loop, because the region comes with
+the cartridge -- loading a PAL game into an emulator that started empty has to move it to
+50 Hz, or it runs the console fast with audio to match.
 
 There is a menu bar now, on Windows, so none of the above has to be memorised: **Emulation**
 (reset, hard reset, pause, frame advance, mute, screenshot), **State**, **Settings** and

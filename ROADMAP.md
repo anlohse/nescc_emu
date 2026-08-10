@@ -426,9 +426,33 @@ ROM could only be opened from a command line.
    Hard Reset came out of the accuracy work rather than the GUI work. Now that reset
    correctly preserves RAM, "power cycle" is a distinct operation and `Nes::powerOn()`
    is it.
-2. **Loading a ROM from the menu**, which is the next item and a larger one than it
-   looks: the run loop has to tolerate having no cartridge, and accept one mid-run.
-   Recent ROMs follows immediately, and earns its keep from the same work.
+2. ~~**Loading a ROM from the menu.**~~ Done, and with it the emulator no longer needs a
+   ROM to start: with none named the window opens empty and says so in its title bar.
+   Naming one on the command line still works and still wins.
+
+   The run loop tolerating an empty machine was the substance of it. With no cartridge
+   there is no frame to step, no audio to generate and nothing to save -- but the window,
+   the menu and quitting all still have to work, so the loop turns and presents black
+   rather than leaving whatever the last game drew, which would read as a frozen
+   emulator rather than an idle one.
+
+   Two things that were easy to get wrong. Loading is a **cold boot**, not a reset: a
+   cartridge going into a slot does not inherit the RAM of the game that just left, which
+   is `powerOn()` and not `reset()`. And a cartridge carries its **region**, so loading a
+   PAL game into an emulator that started empty has to re-time the whole loop -- the
+   frame rate it paces to and the CPU clock the resampler divides down both change, or it
+   runs a 50 Hz console at 60 Hz with audio to match.
+
+   Recent ROMs came free from the same work, kept in `nes.cfg`, capped at eight and
+   de-duplicated case-insensitively -- Windows hands back whatever spelling was typed,
+   and the same game twice in a list of recent games is what nobody wants. The ordinal is
+   the key and the path is the value, so a path may contain anything, equals signs
+   included.
+
+   Running it found two things the tests could not: **Load ROM was still greyed out**,
+   because the menu item was never un-marked when the feature landed, and a ROM named on
+   the command line reached the menu's recent list but never the file, because only the
+   menu path saved the configuration.
 3. **Save states.** The State menu is already the specification: two actions, eight
    slots showing when each was written, and a way to walk between them.
 4. **Dialogs and menus off Windows.** Both say so rather than opening nothing.

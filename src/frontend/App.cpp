@@ -4,6 +4,11 @@
 
 namespace nesfe {
 
+namespace {
+/** Palette entry $0F: the black a television actually showed. */
+const std::uint8_t BLACK = 0x0F;
+} // namespace
+
 /* ------------------------------------------------------------------------- */
 /* Resampler                                                                  */
 /* ------------------------------------------------------------------------- */
@@ -62,7 +67,8 @@ App::App(nes::Nes& console, VideoSink& video, AudioSink& audio,
 		m_deadline(0.0), m_deadlineValid(false),
 		m_running(true), m_paused(false), m_muted(false), m_wasTurbo(false),
 		m_shotIndex(0), m_frames(0), m_rebases(0), m_framesThisSecond(0),
-		m_fpsMark(0.0), m_measuredFps(0.0) { }
+		m_fpsMark(0.0), m_measuredFps(0.0),
+		m_blank(nes::Ppu::SCREEN_WIDTH * nes::Ppu::SCREEN_HEIGHT, BLACK) { }
 
 void App::applyCommands(const InputState& state) {
 	if (state.commands & COMMAND_QUIT)
@@ -113,6 +119,24 @@ void App::applyCommands(const InputState& state) {
 		if (m_video.saveScreenshot(name))
 			m_shotIndex++;
 	}
+}
+
+void App::romChanged(const std::string& name) {
+	m_romName = name;
+
+	// The region came with the cartridge, and everything paced or resampled
+	// follows from it.
+	m_frameSeconds = 1.0 / m_console.frameRate();
+	m_resampler = Resampler(m_console.cpuClockHz(), m_options.audioSampleRate,
+			m_options.targetQueuedSeconds - m_options.queueSlackSeconds,
+			m_options.targetQueuedSeconds + m_options.queueSlackSeconds);
+
+	// Whatever is queued belongs to the game that just left, and loading takes
+	// wall-clock time this loop cannot account for.
+	m_audio.clear();
+	m_deadlineValid = false;
+	if (m_audio.isOpen())
+		m_console.apu().setSampleOutput(m_console.hasCartridge());
 }
 
 void App::setZapperSource(std::function<bool(ZapperState*)> poll,
@@ -196,6 +220,12 @@ bool App::runFrame() {
 	if (!m_running)
 		return false;
 
+	// With no cartridge there is nothing to run: no frame to step, no audio to
+	// generate, nothing to save. The loop still turns, because the menu, the
+	// window and quitting all have to keep working on an empty machine -- which
+	// is the state the emulator now starts in when no ROM was named.
+	const bool haveRom = m_console.hasCartridge();
+
 	for (int port = 0; port < 2; port++)
 		m_console.controller(port).setButtons(state.buttons[port]);
 
@@ -211,10 +241,11 @@ bool App::runFrame() {
 		m_resampler.reset();
 	}
 	m_wasTurbo = state.turbo;
-	const bool generating = m_audio.isOpen() && !state.turbo && !m_muted;
+	const bool generating = haveRom && m_audio.isOpen() && !state.turbo && !m_muted;
 	m_console.apu().setSampleOutput(generating);
 
-	const bool stepping = !m_paused || (state.commands & COMMAND_STEP_FRAME) != 0;
+	const bool stepping = haveRom
+			&& (!m_paused || (state.commands & COMMAND_STEP_FRAME) != 0);
 	if (stepping) {
 		m_console.stepFrame();
 		m_frames++;
@@ -222,7 +253,9 @@ bool App::runFrame() {
 
 	pumpAudio(generating);
 
-	m_video.present(m_console.ppu().framebuffer(),
+	// An empty machine shows black rather than whatever the last game left on
+	// screen, which would look like a frozen emulator rather than an idle one.
+	m_video.present(haveRom ? m_console.ppu().framebuffer() : m_blank.data(),
 			nes::Ppu::SCREEN_WIDTH, nes::Ppu::SCREEN_HEIGHT);
 
 	if (state.turbo) {
@@ -243,11 +276,17 @@ bool App::runFrame() {
 		m_framesThisSecond = 0;
 		m_fpsMark = now;
 
-		char title[128];
-		std::snprintf(title, sizeof(title), "nes - %s%.1f fps%s%s",
-				m_paused ? "paused - " : "", m_measuredFps,
-				state.turbo ? " - turbo" : "",
-				(m_muted || !m_audio.isOpen()) ? " - muted" : "");
+		char title[192];
+		if (!haveRom) {
+			std::snprintf(title, sizeof(title), "nes - no ROM loaded");
+		} else {
+			std::snprintf(title, sizeof(title), "nes - %s%s%s%.1f fps%s%s",
+					m_romName.empty() ? "" : m_romName.c_str(),
+					m_romName.empty() ? "" : " - ",
+					m_paused ? "paused - " : "", m_measuredFps,
+					state.turbo ? " - turbo" : "",
+					(m_muted || !m_audio.isOpen()) ? " - muted" : "");
+		}
 		m_video.setTitle(title);
 	}
 

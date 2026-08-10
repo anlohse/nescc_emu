@@ -5,6 +5,7 @@
 
 #include <map>
 #include <string>
+#include <vector>
 
 namespace nesgui {
 
@@ -49,6 +50,18 @@ struct Config {
 	 * thing that makes people stop trusting a config file.
 	 */
 	std::map<std::string, std::string> pluginSettings;
+
+	/**
+	 * ROMs loaded before, most recent first.
+	 *
+	 * Full paths, because the point of the list is to open one again; whoever
+	 * shows it decides what to call them. Capped, and de-duplicated by path, so
+	 * the file cannot grow without limit and the same game cannot fill it.
+	 */
+	std::vector<std::string> recentRoms;
+
+	/** Put @p path at the front, removing any earlier mention of it. */
+	void noteRecentRom(const std::string& path, std::size_t limit = 8);
 
 	/** @return the stored value, or @p fallback when there is none. */
 	std::string pluginSetting(const std::string& id, const std::string& key,

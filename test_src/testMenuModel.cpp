@@ -28,6 +28,7 @@ const MenuItem* find(const std::vector<MenuSection>& bar, int action) {
 MenuState loaded() {
 	MenuState state;
 	state.romLoaded = true;
+	state.canPickFile = true;
 	return state;
 }
 
@@ -105,7 +106,7 @@ TEST_CASE("what_is_not_built_yet_says_so_and_is_disabled") {
 	// whoever reads this next.
 	const std::vector<MenuSection> bar = buildMenu(loaded());
 	const int notYet[] = {
-		MENU_LOAD_ROM, MENU_CLOSE_ROM, MENU_SAVE_STATE, MENU_LOAD_STATE,
+		MENU_SAVE_STATE, MENU_LOAD_STATE,
 		MENU_NEXT_SLOT, MENU_PREV_SLOT, MENU_HOTKEYS
 	};
 	for (std::size_t i = 0; i < sizeof(notYet) / sizeof(notYet[0]); i++) {
@@ -179,4 +180,18 @@ TEST_CASE("the_numbered_families_do_not_collide_with_the_named_actions") {
 	CHECK_EQ(slotForAction(MENU_RESET), -1);
 	CHECK_EQ(recentForAction(recentAction(5)), 5);
 	CHECK_EQ(recentForAction(MENU_ABOUT), -1);
+}
+
+TEST_CASE("loading_needs_a_file_picker_and_closing_needs_a_cartridge") {
+	MenuState state;                 // nothing loaded, no picker
+	CHECK_FALSE(find(buildMenu(state), MENU_LOAD_ROM)->enabled);
+	CHECK_FALSE(find(buildMenu(state), MENU_CLOSE_ROM)->enabled);
+
+	state.canPickFile = true;
+	CHECK(find(buildMenu(state), MENU_LOAD_ROM)->enabled);
+	// Still nothing to close.
+	CHECK_FALSE(find(buildMenu(state), MENU_CLOSE_ROM)->enabled);
+
+	state.romLoaded = true;
+	CHECK(find(buildMenu(state), MENU_CLOSE_ROM)->enabled);
 }
