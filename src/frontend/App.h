@@ -5,7 +5,9 @@
 
 #include "nes/Nes.h"
 
+#include <cstdint>
 #include <functional>
+#include <string>
 #include <vector>
 
 namespace nesfe {
@@ -114,6 +116,21 @@ public:
 	void postCommand(unsigned commands) { m_posted |= commands; }
 
 	/**
+	 * Tell the loop the cartridge has changed.
+	 *
+	 * More than a label. A cartridge carries its region, and the region decides
+	 * both the frame rate this loop paces to and the CPU clock the resampler
+	 * divides down -- so loading a PAL game into an emulator that started empty
+	 * has to re-time the whole loop, or it runs a 50 Hz console at 60 Hz with
+	 * audio to match.
+	 *
+	 * @param name  what to call it in the title bar, or empty for none. A name
+	 *              rather than a path: the loop has no business knowing what a
+	 *              file system looks like.
+	 */
+	void romChanged(const std::string& name);
+
+	/**
 	 * Forget the wall-clock deadline.
 	 *
 	 * For anything that stops the emulator for an unknown length of time -- a
@@ -144,6 +161,15 @@ public:
 private:
 	void applyCommands(const InputState& state);
 	unsigned m_posted = 0;
+	std::string m_romName;
+	/**
+	 * A black frame, presented when there is no cartridge.
+	 *
+	 * Kept rather than built each time, and black rather than whatever the last
+	 * game left behind -- a stale picture looks like a frozen emulator instead
+	 * of an idle one.
+	 */
+	std::vector<std::uint8_t> m_blank;
 	void updateZapper();
 	void pumpAudio(bool generating);
 	void pace();

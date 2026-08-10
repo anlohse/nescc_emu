@@ -103,6 +103,8 @@ if(NES_BUILD_GUI)
         src/frontend/MenuModel.cpp
         src/frontend/MenuBarWin32.cpp
         src/frontend/MenuBarStub.cpp
+        src/frontend/FileDialogWin32.cpp
+        src/frontend/FileDialogStub.cpp
         src/frontend/SettingsDialogWin32.cpp
         src/frontend/SettingsDialogStub.cpp
         src/frontend/BindingModel.cpp

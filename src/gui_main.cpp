@@ -10,6 +10,7 @@
 #include "GuiConfig.h"
 #include "frontend/App.h"
 #include "frontend/HostServices.h"
+#include "frontend/FileDialog.h"
 #include "frontend/MenuBar.h"
 #include "frontend/SdlBackend.h"
 #include "frontend/PluginSettings.h"
@@ -33,7 +34,9 @@ namespace {
 
 void usage(const char* argv0) {
 	std::printf(
-		"usage: %s <rom.nes> [options]\n"
+		"usage: %s [rom.nes] [options]\n"
+		"\n"
+		"With no ROM the window opens empty; load one from the Emulation menu.\n"
 		"\n"
 		"  --scale=N      integer window scale, default 3\n"
 		"  --fullscreen   start in borderless fullscreen\n"
@@ -120,6 +123,16 @@ void buildRegistry(nesplug::Registry* registry,
 		std::fprintf(stderr, "%s\n", warning.c_str());
 }
 
+/** The part of a path a person recognises: no directory, no extension. */
+std::string displayName(const std::string& path) {
+	std::size_t start = path.find_last_of("/\\");
+	start = (start == std::string::npos) ? 0 : start + 1;
+	std::size_t end = path.find_last_of('.');
+	if (end == std::string::npos || end < start)
+		end = path.size();
+	return path.substr(start, end - start);
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -202,21 +215,23 @@ int main(int argc, char* argv[]) {
 		return 0;
 	}
 
-	if (!romPath) {
-		usage(argv[0]);
-		return 2;
-	}
-
+	// Starting with no ROM is a perfectly good way to start, now that one can be
+	// loaded from the menu. Naming one on the command line still works, and a
+	// bad name is still a failure to start rather than a silent empty window --
+	// somebody who typed a path wants to hear that it was wrong.
 	nes::Nes console;
 	std::string error;
-	if (!console.loadRom(romPath, &error)) {
-		// A GUI launched from a file manager has nowhere to print, so say it in
-		// a box as well as on stderr.
-		std::fprintf(stderr, "%s\n", error.c_str());
-		SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "nes", error.c_str(), nullptr);
-		return 1;
+	if (romPath) {
+		if (!console.loadRom(romPath, &error)) {
+			// A GUI launched from a file manager has nowhere to print, so say it
+			// in a box as well as on stderr.
+			std::fprintf(stderr, "%s\n", error.c_str());
+			SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "nes", error.c_str(),
+					nullptr);
+			return 1;
+		}
+		console.reset();
 	}
-	console.reset();
 
 	// Audio and gamepads are both requested but not required: a machine with no
 	// sound device and no pad still gets a working emulator with a keyboard.
@@ -359,9 +374,43 @@ int main(int argc, char* argv[]) {
 		app.dropDeadline();
 	};
 
+	// Loading is a cold boot: a cartridge going into a slot is not a reset, and
+	// the RAM of the game that just left is not the new game's business.
+	auto loadRom = [&](const std::string& path) {
+		std::string why;
+		console.saveBatteryRam();
+		if (!console.loadRom(path, &why)) {
+			app.dropDeadline();
+			// No parent: this takes an SDL_Window, and what the video plugin
+			// exports is a native handle. Unparented is the honest option
+			// rather than casting one into the other.
+			SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "nes", why.c_str(),
+					nullptr);
+			app.dropDeadline();
+			return false;
+		}
+		console.powerOn();
+		app.romChanged(displayName(path));
+
+		config.noteRecentRom(path);
+		if (!config.save(configPath))
+			std::fprintf(stderr, "could not write %s\n", configPath.c_str());
+		SDL_Log("loaded %s", path.c_str());
+		return true;
+	};
+
+	auto closeRom = [&]() {
+		console.saveBatteryRam();
+		console.setCartridge(nullptr);
+		app.romChanged(std::string());
+	};
+
 	auto menuState = [&]() {
 		nesfe::MenuState state;
 		state.romLoaded = console.hasCartridge();
+		state.canPickFile = nesfe::fileDialogAvailable();
+		for (std::size_t i = 0; i < config.recentRoms.size(); i++)
+			state.recentRoms.push_back(displayName(config.recentRoms[i]));
 		state.paused = app.paused();
 		state.muted = app.muted();
 		state.videoConfigurable = nesplug::hasConfigureDialog(*videoEntry);
@@ -392,13 +441,63 @@ int main(int argc, char* argv[]) {
 	}, nullptr);
 #endif
 
+	// Name whatever was loaded from the command line, and remember it: a ROM
+	// opened that way belongs in the recent list as much as one picked from the
+	// menu.
+	if (console.hasCartridge()) {
+		app.romChanged(displayName(romPath));
+		config.noteRecentRom(romPath);
+		// Written now rather than at exit: a ROM named on the command line
+		// belongs in the list as much as one picked from the menu, and a crash
+		// or a kill should not be what decides whether it was remembered.
+		config.save(configPath);
+	}
+
 	bool wasPaused = app.paused();
 	bool wasMuted = app.muted();
+	bool refreshMenu = false;
 
 	while (app.runFrame()) {
 		const int action = nesfe::takeMenuAction();
+		const int recent = nesfe::recentForAction(action);
+		if (recent >= 0) {
+			// The list can be rewritten by the load, so take the path first.
+			if (recent < static_cast<int>(config.recentRoms.size())) {
+				const std::string path = config.recentRoms[recent];
+				loadRom(path);
+				refreshMenu = true;
+			}
+		}
 		switch (action) {
 		case nesfe::MENU_NONE:
+			break;
+		case nesfe::MENU_LOAD_ROM: {
+			if (!nesfe::fileDialogAvailable()) {
+				SDL_Log("no file picker on this platform yet -- name a ROM on "
+						"the command line");
+				break;
+			}
+			// Start where the last ROM came from, which is almost always where
+			// the next one is.
+			std::string startDir;
+			if (!config.recentRoms.empty()) {
+				const std::string& last = config.recentRoms.front();
+				const std::size_t cut = last.find_last_of("/\\");
+				if (cut != std::string::npos)
+					startDir = last.substr(0, cut);
+			}
+			std::string chosen;
+			app.dropDeadline();
+			const bool picked = nesfe::chooseRomFile(video.nativeWindow(),
+					startDir, &chosen);
+			app.dropDeadline();
+			if (picked && loadRom(chosen))
+				refreshMenu = true;
+			break;
+		}
+		case nesfe::MENU_CLOSE_ROM:
+			closeRom();
+			refreshMenu = true;
 			break;
 		case nesfe::MENU_RESET:
 			app.postCommand(nesfe::COMMAND_RESET);
@@ -442,18 +541,24 @@ int main(int argc, char* argv[]) {
 			app.dropDeadline();
 			break;
 		default:
-			// A slot, a recent ROM, or something listed but not built yet. The
-			// menu already shows those disabled, so arriving here means a new
-			// item was added without a case, which is worth hearing about.
-			SDL_Log("menu action %d is not wired up yet", action);
+			// A save slot, or something listed but not built yet. Recent ROMs
+			// were handled above. The menu already shows those disabled, so
+			// arriving here means a new item was added without a case, which is
+			// worth hearing about.
+			if (recent < 0)
+				SDL_Log("menu action %d is not wired up yet", action);
 			break;
 		}
 
 		// The ticks beside Pause and Mute have to follow the state, and the
-		// state can change from a key as easily as from the menu.
-		if (menuOn && (app.paused() != wasPaused || app.muted() != wasMuted)) {
+		// state can change from a key as easily as from the menu. Loading or
+		// closing a ROM changes more than a tick: half the bar depends on
+		// whether there is a cartridge.
+		if (menuOn && (refreshMenu || app.paused() != wasPaused
+				|| app.muted() != wasMuted)) {
 			wasPaused = app.paused();
 			wasMuted = app.muted();
+			refreshMenu = false;
 			nesfe::setMenuBar(video.nativeWindow(), nesfe::buildMenu(menuState()),
 					false);
 		}

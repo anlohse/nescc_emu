@@ -109,6 +109,8 @@ struct MenuSection {
  */
 struct MenuState {
 	bool romLoaded = false;
+	/** Whether this platform can ask a person for a file yet. */
+	bool canPickFile = false;
 	bool paused = false;
 	bool muted = false;
 	/** Which plugin kinds offer a dialog of their own. */
