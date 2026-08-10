@@ -318,7 +318,23 @@ Roughly in order of how likely a real game is to notice:
   `08-nmi_off_timing`, which are about which CPU cycle the interrupt is taken on rather
   than which dot the flag moves, and the odd-frame skip.
 
-  The other large cluster is interrupt latency inside the CPU core (5 ROMs).
+  The other large cluster is interrupt latency inside the CPU core, and one of its five
+  is now fixed. **CLI, SEI and PLP change the I flag in their own final cycle**, which
+  is after the CPU has already decided whether to take an interrupt at that boundary --
+  so an interrupt pending across `CLI; SEI` is taken exactly once, just after the SEI.
+  RTI is not like that: it restores I early enough to be felt at once. blargg's readme
+  states the rule outright, which is a good argument for reading the documentation of a
+  test before trying to pass it.
+
+  Only the delay is tracked, not a shadow copy of the flag, so a debugger writing I
+  directly is still obeyed immediately. The first attempt shadowed the flag and broke
+  two of the core's own tests, which write it exactly that way.
+
+  What is left in that cluster -- an NMI arriving partway through a BRK, a taken branch
+  moving the poll, an IRQ landing inside a DMA -- all needs the CPU to poll *within* an
+  instruction rather than between them. The core charges an instruction's cycles in one
+  lump at the end, so there is no "partway through" to poll at yet. That is a real piece
+  of work on the core and the right next one for it. **47 of 93 pass.**
 - ~~**Bus conflicts** on UxROM and CNROM~~ — done, driven by the NES 2.0 submapper
   rather than guessed from the mapper number.
 - ~~**MMC1's consecutive-write rule.**~~ Done, and it needed fixing in the CPU first: a
