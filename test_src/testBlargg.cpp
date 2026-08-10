@@ -255,10 +255,12 @@ const Known KNOWN_FAILURES[] = {
 	{ "ppu_vbl_nmi/08-nmi_off_timing", "NMI disable timing at the vblank edge" },
 	{ "ppu_vbl_nmi/10-even_odd_timing","odd-frame dot skip vs enabling rendering" },
 
-	// Interrupt latency inside the CPU core: how many instructions run after
-	// CLI before an IRQ is taken, what happens when NMI arrives during BRK,
-	// and where DMA steals its cycles from. All emu6502's, not this side's.
-	{ "cpu_interrupts_v2/1-cli_latency",       "CLI/SEI take effect one instruction late" },
+	// Interrupt latency inside the CPU core. CLI's own delay is fixed; what is
+	// left all needs the CPU to poll for interrupts *within* an instruction
+	// rather than between them -- an NMI arriving partway through a BRK, a
+	// taken branch moving the poll, an IRQ landing inside a DMA. The core
+	// charges an instruction's cycles in one lump at the end, so there is no
+	// "partway through" to poll at yet. All emu6502's, not this side's.
 	{ "cpu_interrupts_v2/2-nmi_and_brk",       "NMI does not hijack BRK" },
 	{ "cpu_interrupts_v2/3-nmi_and_irq",       "NMI and IRQ arriving together" },
 	{ "cpu_interrupts_v2/4-irq_and_dma",       "IRQ timing across an OAM DMA" },

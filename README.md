@@ -500,7 +500,7 @@ copyleft does not reach this code.
 The short list below is the immediate work; [ROADMAP.md](ROADMAP.md) has the longer
 view, including the backend-interface design and what would be needed for a 1.0.
 
-1. The rest of blargg's suites. 46 of 93 pass; the largest clusters left are the dots
+1. The rest of blargg's suites. 47 of 93 pass; the largest clusters left are the dots
    around the vblank edge and interrupt latency inside the CPU core, each listed with its
    cause in `test_src/testBlargg.cpp`. nestest would still be worth having as a trace to
    compare against, whenever that ROM's licensing is clear.
