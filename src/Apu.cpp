@@ -652,4 +652,40 @@ std::uint8_t Apu::peekStatus() const {
 	return status;
 }
 
+/* ------------------------------------------------------------------------- */
+/* Save states                                                                */
+/* ------------------------------------------------------------------------- */
+
+void Apu::serialize(State& state) {
+	state.tag("APU ");
+
+	// The five channels are plain structures with no pointers, so each goes in
+	// whole, guarded by its own size. Adding a field to one makes an older
+	// state refuse rather than be read as something else.
+	state.structure(m_pulse1);
+	state.structure(m_pulse2);
+	state.structure(m_triangle);
+	state.structure(m_noise);
+	state.structure(m_dmc);
+
+	state.value(m_frameCounter);
+	state.value(m_frameMode);
+	state.value(m_frameIrqInhibit);
+	state.value(m_frameIrq);
+	state.value(m_dmcIrq);
+	state.value(m_frameResetDelay);
+	state.value(m_evenCycle);
+	state.value(m_dmcStall);
+
+	// The filters carry a sample of history each. Restoring without them puts a
+	// step through the high-pass and a click in the speaker.
+	state.value(m_hpPrevIn);
+	state.value(m_hpPrevOut);
+	state.value(m_lpPrev);
+
+	// Deliberately absent: the sample buffer, which the host drains every frame
+	// and which belongs to the run rather than to the machine. The region and
+	// its period tables are not here either -- they come from the cartridge.
+}
+
 } // namespace nes

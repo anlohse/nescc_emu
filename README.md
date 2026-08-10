@@ -40,7 +40,11 @@ that keeps the status bar fixed while the level moves beneath it all work.
 | Loadable plugins | `plugins/audio_sdl` is a real shared library; a module shadows the built-in of the same id |
 | Plugin chooser | `F1`, or `--settings` with no ROM: pick a plugin per job and the window size, saved to `nes.cfg` |
 | Rebinding | the controller plugin's own dialog: press Bind, then press the key or pad button |
-| Plugin settings | each plugin's own dialog — video's filter and pixel shape, audio's device, volume and buffer |
+| Plugin settings | each plugin's own dialog — video's scaling style and pixel shape, audio's device, volume and buffer |
+| CRT style | a soft stretch, then a mask multiplied over it — a television's slot mask or a monitor's grille |
+| Menu bar | native, on Windows: Emulation, State, Settings, Help — every item implemented |
+| Loading ROMs | from the menu or the command line; the window opens empty without one, and remembers the last eight |
+| Save states | eight slots beside the ROM, with the whole machine in them: RAM, both chips, the cartridge's registers, and where the beam is |
 | Host services | plugins read the frame, the window handle and their own settings through `nes_host` |
 | Window | `nes_gui`: SDL2 video and audio, keyboard, paced to NTSC's 60.0988 Hz |
 | Headless runner | `nes_run`: tracing, scripted input, PPM screenshots, WAV capture |
@@ -194,6 +198,108 @@ converts both directions, so the names it writes are exactly the names it reads 
 A binding it does not recognise is reported and skipped rather than rejecting the file:
 one typo costs that binding, not the rest of your setup.
 
+**A ROM is no longer required to start.** With none named the window opens empty and says
+so, and one can be loaded from Emulation > Load ROM or from the list of the last eight.
+Naming one on the command line still works and still wins -- and a bad name there is
+still a failure to start rather than a silent empty window, because somebody who typed a
+path wants to hear that it was wrong.
+
+Loading is a cold boot, not a reset: a cartridge going into a slot does not inherit the
+RAM of the game that just left. It also re-times the loop, because the region comes with
+the cartridge -- loading a PAL game into an emulator that started empty has to move it to
+50 Hz, or it runs the console fast with audio to match.
+
+There is a menu bar now, on Windows, so none of the above has to be memorised: **Emulation**
+(reset, hard reset, pause, frame advance, mute, screenshot), **State**, **Settings** and
+**Help**. Every item on it now does something. The rule that got it there is still enforced by a
+test: an item may be listed before it is built, but then it has to be visibly disabled --
+a gap somebody can see beats one they have to guess at, and an enabled item that does
+nothing is a bug report.
+
+**Help > Keys and Buttons** lists every binding, read from the configuration rather than
+from a table written by hand: a page that still says `Z` after somebody has moved A to `Q`
+is worse than no page at all.
+
+Two things about it are worth knowing. The window belongs to the *video plugin*, and the
+menu is host business, so the host attaches a menu to a window it did not create using
+the handle the plugin already exports for dialogs. That is a deliberate exception to the
+plugin owning its window: the alternative was an ABI call obliging every video plugin
+ever written to host a menu. And the window grows by exactly the menu's height, so the
+picture keeps the size that was asked for instead of losing a strip to it.
+
+**Scaling** offers Sharp, Smooth, **CRT television** and **CRT monitor**. The CRT styles do
+two separate things in the order a television did them. First they stretch the picture with
+a linear filter, because nothing about a television was sharp — the beam was a spot with
+soft edges, the signal was bandwidth-limited, and the phosphor spread whatever light it got.
+Then they multiply a mask over the result:
+
+```
+[R  G  B ]
+[R  G  B ]
+[r  g  b ]   <- dimmer, where the beam was fading between lines
+```
+
+The order is the whole thing. Doing the mask first and stretching afterwards gives a grid
+of coloured squares; blurring first is what makes it read as a television. It also costs
+nothing — the stretch is what a renderer does anyway, and the mask is one blended draw, so
+no pixel is touched per frame and it works at any window size rather than only at 3x.
+
+Where the mask lives matters too. The stripes are a property of the *screen* — they were in
+the glass, at a pitch that had nothing to do with what resolution was being displayed — so
+the mask is built in output pixels. Scanlines are the other way round: they are in the
+*signal*, one per line the console drew, so their spacing follows 240 rather than the
+window.
+
+**A television and a monitor were different glass**, which is why both are offered rather
+than one being a "better CRT" setting. A monitor — and a Trinitron television — used an
+aperture grille: unbroken vertical stripes running the whole height of the tube. Most
+televisions used a *slot mask*, where the colour columns run straight down just the same
+but each is broken into short slots, and the bridges between one column's slots sit half a
+slot from its neighbour's:
+
+```
+R  G  B    r  g  b
+R  G  B    R  G  B
+r  g  b    r  g  b
+```
+
+A brick wall stacked sideways — the colours stay in step and the *gaps* alternate. It is
+much of why a television never looked like a monitor showing the same picture.
+
+That costs nothing to add, because a slot's height is a scanline's height: the bridge is
+where the beam was already fading, so the stagger shifts the beam by half a line and needs
+no geometry of its own. The beam integral takes a position rather than an index, so half a
+line is no harder to ask for than a whole one. And shifting a periodic profile cannot change
+what a whole period of it integrates to, so a staggered column is exactly as bright as an
+aligned one — measured on screen, the two masks come out at 112.4 and 112.5 average luma.
+
+It also *reduces* the horizontal banding rather than adding any: alternating gaps break up
+the continuous dark rows a grille has, measuring 0.991 row-to-row uniformity against the
+grille's 0.968.
+
+Three things about it came out of measuring screenshots rather than from taste, and each
+one changed the design:
+
+- **Brightness is paid with a curve, not a multiply.** A mask can only remove light, so
+  what it takes has to be paid in beforehand — but most NES colours already have a channel
+  at 255, where a multiply has nowhere to put it and clips. With a linear gain the mask took
+  42% of Mario's sky and only 16% of its red and green, and the sky turned lavender. A gamma
+  lift through (0,0) and (255,255) has room everywhere in between and cannot clip anything.
+- **The stripes are weak and the scanlines are strong.** Anything the mask takes evenly is
+  just a dimmer television, which is right; taking it unevenly is a different colour rather
+  than a darker one. A scanline dims all three channels together so it cannot shift a hue
+  however deep it goes, which is why it carries most of the effect.
+- **The beam is integrated over each row, not sampled once in it.** An 8:7 picture
+  letterboxed into a 720-pixel window is 2.63 rows per console line, so every line meets the
+  rows at a different phase. One sample per row put the seams at 98, 109 and 116 against a
+  135 line — wide horizontal bands that look like a fault rather than like a television.
+  Integrating has no phase to be wrong about, and the closed form costs two cosines.
+
+The picture ends up at about four fifths of its unfiltered brightness, with hues intact.
+
+Reset and Hard Reset are genuinely different. Reset is the button on the front — RAM
+survives it, and so do A, X and Y. Hard Reset is the switch at the back, and clears them.
+
 `F1` opens the chooser, which also sets the window size, and every plugin's Settings
 button opens that plugin's own dialog: the filter and pixel shape for video, the output
 device, volume and buffer size for audio. All of it takes effect the next time the
@@ -312,6 +418,38 @@ The Zapper is scripted the same way, with `--shoot=X,Y@FRAME[:HELD]` in console 
 Giving any `--shoot` plugs a gun into port two instead of a pad. The trigger has to be
 held across several frames, because the game blanks the screen for a frame after it is
 pulled and only then looks for light.
+
+## Save states
+
+Eight slots, written beside the ROM as `.st1` to `.st8`, from the State menu. A slot shows
+when it was written, read from the file rather than remembered, so a state from an earlier
+run is described correctly and a deleted one goes back to reading `(empty)`.
+
+Everything a running console holds goes in: RAM, both chips' registers and counters, the
+cartridge's own registers and work RAM, and where the beam is -- a state taken partway
+down the picture resumes partway down the picture, half-drawn frame included. What is
+deliberately absent is the ROM, because a state is not a copy of the cartridge, and the
+APU's sample buffer, which belongs to the run rather than to the machine.
+
+Each class describes its state **once**, in a `serialize()` that runs in both directions.
+A save routine and a separate load routine drift apart -- somebody adds a field to one and
+not the other, and it surfaces days later as a game that resumes almost correctly.
+
+The format is not portable and does not pretend to be. A state records the version it was
+written by, a fingerprint of the ROM, and the size of every structure it contains, so one
+from a different build or a different game is **refused** rather than misread -- and
+refused with the machine still running, because a half-loaded console is worse than a
+rejected file.
+
+### How they are tested
+
+Not by checking that fields come back. By determinism: run a while, save, run on, load,
+run the same distance again, and compare every pixel. An omission is the only way a save
+state really fails, and an omission is exactly what a field-by-field test cannot see.
+
+That test was itself checked by breaking the code on purpose -- omitting the console's RAM
+from the state made three of the five cases fail, which is how you know a passing run
+means something.
 
 ## Testing
 
@@ -500,7 +638,7 @@ copyleft does not reach this code.
 The short list below is the immediate work; [ROADMAP.md](ROADMAP.md) has the longer
 view, including the backend-interface design and what would be needed for a 1.0.
 
-1. The rest of blargg's suites. 47 of 93 pass; the largest clusters left are the dots
+1. The rest of blargg's suites. 48 of 93 pass; the largest clusters left are the dots
    around the vblank edge and interrupt latency inside the CPU core, each listed with its
    cause in `test_src/testBlargg.cpp`. nestest would still be worth having as a trace to
    compare against, whenever that ROM's licensing is clear.

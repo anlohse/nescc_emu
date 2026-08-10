@@ -5,7 +5,9 @@
 
 #include "nes/Nes.h"
 
+#include <cstdint>
 #include <functional>
+#include <string>
 #include <vector>
 
 namespace nesfe {
@@ -102,6 +104,42 @@ public:
 			std::function<bool(int, int, int*, int*)> toFrame);
 
 	/**
+	 * Ask for something from outside the input plugin.
+	 *
+	 * A menu is not a controller: it does not report a state every frame, it
+	 * produces one event when a person picks an item. So the bits are merged
+	 * into whatever the next frame polls, and the loop cannot tell the
+	 * difference between a menu item and the key that does the same thing --
+	 * which is the point, because there is then only one implementation of
+	 * each.
+	 */
+	void postCommand(unsigned commands) { m_posted |= commands; }
+
+	/**
+	 * Tell the loop the cartridge has changed.
+	 *
+	 * More than a label. A cartridge carries its region, and the region decides
+	 * both the frame rate this loop paces to and the CPU clock the resampler
+	 * divides down -- so loading a PAL game into an emulator that started empty
+	 * has to re-time the whole loop, or it runs a 50 Hz console at 60 Hz with
+	 * audio to match.
+	 *
+	 * @param name  what to call it in the title bar, or empty for none. A name
+	 *              rather than a path: the loop has no business knowing what a
+	 *              file system looks like.
+	 */
+	void romChanged(const std::string& name);
+
+	/**
+	 * Forget the wall-clock deadline.
+	 *
+	 * For anything that stops the emulator for an unknown length of time -- a
+	 * modal dialog, an open menu, a file picker. Without it the next frame is
+	 * measured against a moment long past and the pacer chases the difference.
+	 */
+	void dropDeadline() { m_deadlineValid = false; }
+
+	/**
 	 * Run one frame: poll input, act on it, step the console, present, pace.
 	 * @return false once the player has asked to quit.
 	 */
@@ -111,6 +149,7 @@ public:
 	void run();
 
 	bool paused() const { return m_paused; }
+	bool running() const { return m_running; }
 	bool muted() const { return m_muted; }
 	/** Frames per second as actually measured, or 0 before the first second. */
 	double measuredFps() const { return m_measuredFps; }
@@ -121,6 +160,16 @@ public:
 
 private:
 	void applyCommands(const InputState& state);
+	unsigned m_posted = 0;
+	std::string m_romName;
+	/**
+	 * A black frame, presented when there is no cartridge.
+	 *
+	 * Kept rather than built each time, and black rather than whatever the last
+	 * game left behind -- a stale picture looks like a frozen emulator instead
+	 * of an idle one.
+	 */
+	std::vector<std::uint8_t> m_blank;
 	void updateZapper();
 	void pumpAudio(bool generating);
 	void pace();

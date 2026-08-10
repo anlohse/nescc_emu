@@ -269,8 +269,7 @@ const Known KNOWN_FAILURES[] = {
 	// A 6502 reads before it writes, and reads twice where an index crosses a
 	// page. Those extra reads are invisible in RAM and very visible on $2007
 	// or $4015, which is what these check.
-	{ "instr_misc/03-dummy_reads",     "no dummy read on indexed addressing" },
-	{ "instr_misc/04-dummy_reads_apu", "no dummy read on indexed addressing" },
+	{ "instr_misc/04-dummy_reads_apu", "the SHx family makes no dummy read" },
 	{ "ppu_read_buffer/test_ppu_read_buffer", "no dummy read on indexed addressing" },
 	{ "cpu_exec_space/test_cpu_exec_space_apu",   "unmapped $4018-$40FF should read as open bus" },
 	{ "cpu_exec_space/test_cpu_exec_space_ppuio", "RTS does not do its dummy fetch" },

@@ -334,7 +334,22 @@ Roughly in order of how likely a real game is to notice:
   moving the poll, an IRQ landing inside a DMA -- all needs the CPU to poll *within* an
   instruction rather than between them. The core charges an instruction's cycles in one
   lump at the end, so there is no "partway through" to poll at yet. That is a real piece
-  of work on the core and the right next one for it. **47 of 93 pass.**
+  of work on the core and the right next one for it.
+
+  Starting it turned the plan inside out. The intention was to let the CPU tell the bus
+  when it burned a cycle without touching it, so a host could place those cycles
+  properly -- and **a 6502 has none to place**. It drives the bus on every cycle, so the
+  gap between an instruction's cycle count and its access count was never idle time; it
+  was reads this core was not making. The cycle an indexed mode spends adding the index
+  is a read of the address with the carry not yet applied, invisible against RAM and
+  very visible against `$2007` or `$4015`.
+
+  Those reads exist now, which fixes `instr_misc/03-dummy_reads` and leaves `04` failing
+  only on the unstable `SHx` opcodes. **48 of 93 pass.** Wiring them by pattern missed
+  four of the twelve read-modify-write templates, because `ROL`, `ROR`, `RLA` and `RRA`
+  name their local `old` where the rest say `orig` -- and the ROM named `ROL abs,x`
+  specifically, which is a fair argument for the suite over a careful reading of one's
+  own patch.
 - ~~**Bus conflicts** on UxROM and CNROM~~ — done, driven by the NES 2.0 submapper
   rather than guessed from the mapper number.
 - ~~**MMC1's consecutive-write rule.**~~ Done, and it needed fixing in the CPU first: a
@@ -375,6 +390,186 @@ Roughly in order of how likely a real game is to notice:
 - **A decimal-mode switch in emu6502**: the 2A03 ignores the `D` flag in `ADC`/`SBC`
   and the core implements full BCD. No commercial game depends on this, which is why it
   is this far down.
+
+## The window itself
+
+Accuracy work reached a resting point at 48 of 93 with every remaining failure named, and
+what is left there needs the CPU's execution model rewritten for a payoff no commercial
+game demonstrably needs. Usability had a much larger gap: everything was a hotkey, and a
+ROM could only be opened from a command line.
+
+1. ~~**A menu bar.**~~ Done, natively, on Windows. Emulation, State, Settings and Help,
+   with **what is not implemented listed and disabled** rather than hidden -- a gap
+   somebody can see beats one they have to guess at, and the disabled entries are the
+   work list for this section.
+
+   Where to put it was a real question, because the window belongs to the video plugin
+   and the menu is host business: files, save slots, dialogs. The host attaches a native
+   menu to the handle the plugin already exports for parenting dialogs, which is a
+   deliberate exception to a plugin owning its window. The alternative was an ABI call
+   obliging every video plugin ever written to host a menu for the benefit of a host
+   feature, and there is exactly one video plugin.
+
+   Three details that had to be got right. The window grows by the menu's height, or the
+   picture silently loses a strip of itself. A menu command cannot arrive through SDL's
+   event queue, because the *input plugin* drains it and drops what it does not
+   recognise -- so a platform message hook is used, the one route into the process that
+   does not pass through somebody else's plugin. And an open menu runs the platform's own
+   message loop, which stops the emulator, so the frame deadline is dropped rather than
+   chased afterwards.
+
+   What is on it is `MenuModel`, tested with no window at all: what is offered with no
+   cartridge, which toggles carry a tick, that exactly one save slot is current, and --
+   in both directions -- that nothing enabled is unimplemented and nothing unimplemented
+   is enabled.
+
+   Hard Reset came out of the accuracy work rather than the GUI work. Now that reset
+   correctly preserves RAM, "power cycle" is a distinct operation and `Nes::powerOn()`
+   is it.
+2. ~~**Loading a ROM from the menu.**~~ Done, and with it the emulator no longer needs a
+   ROM to start: with none named the window opens empty and says so in its title bar.
+   Naming one on the command line still works and still wins.
+
+   The run loop tolerating an empty machine was the substance of it. With no cartridge
+   there is no frame to step, no audio to generate and nothing to save -- but the window,
+   the menu and quitting all still have to work, so the loop turns and presents black
+   rather than leaving whatever the last game drew, which would read as a frozen
+   emulator rather than an idle one.
+
+   Two things that were easy to get wrong. Loading is a **cold boot**, not a reset: a
+   cartridge going into a slot does not inherit the RAM of the game that just left, which
+   is `powerOn()` and not `reset()`. And a cartridge carries its **region**, so loading a
+   PAL game into an emulator that started empty has to re-time the whole loop -- the
+   frame rate it paces to and the CPU clock the resampler divides down both change, or it
+   runs a 50 Hz console at 60 Hz with audio to match.
+
+   Recent ROMs came free from the same work, kept in `nes.cfg`, capped at eight and
+   de-duplicated case-insensitively -- Windows hands back whatever spelling was typed,
+   and the same game twice in a list of recent games is what nobody wants. The ordinal is
+   the key and the path is the value, so a path may contain anything, equals signs
+   included.
+
+   Running it found two things the tests could not: **Load ROM was still greyed out**,
+   because the menu item was never un-marked when the feature landed, and a ROM named on
+   the command line reached the menu's recent list but never the file, because only the
+   menu path saved the configuration.
+3. ~~**Save states.**~~ Done, and the State menu turned out to be a good specification:
+   two actions, eight slots showing when each was written, and a way to walk between them.
+
+   One decision shaped the whole thing: **every class describes its state once**, in a
+   `serialize()` that runs in both directions. A save routine and a separate load routine
+   drift apart the first time somebody adds a field to one of them, and the bug surfaces
+   days later as a game that resumes almost correctly.
+
+   The format is deliberately not portable. It carries its version, a fingerprint of the
+   ROM, and the size of every structure in it, so a state from another build or another
+   game is refused -- and refused *before* anything is restored, because a half-loaded
+   console is worse than a rejected file. A truncated one resets the machine and says so.
+
+   **The test is the interesting part.** Not "does this field come back", but: run a
+   while, save, run on, load, run the same distance again, compare every pixel. An
+   omission is the only real failure mode of a save state, and an omission is precisely
+   what a field-by-field test cannot see. Then the test was checked by breaking the code
+   on purpose -- leaving the console's RAM out of the state failed three of the five
+   cases, which is how a passing run earns any trust at all.
+
+   Worth recording what the state has to include beyond the obvious: the PPU's beam
+   position and half-drawn framebuffer, A12's recent history (or an MMC3 counter resumes
+   against an edge that never happened), the delayed I flag (or restoring inside
+   `CLI; SEI` takes an interrupt the real machine would not), the PAL dot remainder, and
+   the APU's filter history -- three floats, without which a restore clicks.
+4. ~~**Keys and Buttons.**~~ Done, and it is the last item on the bar: everything listed
+   in the menu now does something.
+
+   Built from the configuration each time it opens, not from a table written alongside it.
+   That is the whole design decision, and the test that matters says so directly: rebind A
+   to Q and the page has to say Q. A reference that drifts from the bindings is not merely
+   useless, it tells a person something untrue.
+
+   A read-only edit control rather than a message box, because thirty lines need to scroll
+   and two columns need a fixed pitch to line up -- and because being able to select a line
+   and copy it is a reasonable thing to want from a page listing what your keys do.
+5. ~~**A CRT scaling style.**~~ Done, and worth recording because the first version was
+   built, looked at, and rejected -- which is what a cosmetic feature is for.
+
+   The first attempt expanded every console pixel into a 3x3 cell carrying red, green and
+   blue in its columns and a dimmer last row. The arithmetic was right and the result was
+   wrong: it read as a grid of coloured squares rather than as a television, because a
+   television was never sharp. The beam was a spot with soft edges, the signal was
+   bandwidth-limited, and the phosphor spread whatever light it got.
+
+   So the mask stayed and the order changed. Stretch with a linear filter first, then
+   multiply the same mask over the stretched picture. It is faster -- the stretch is what a
+   renderer does anyway and the mask is one blended draw, where the expansion touched nine
+   pixels per console pixel per frame -- and it works at any window size instead of looking
+   right only at 3x. It also still needs no shader, which matters because `SDL_Renderer`
+   does not portably offer one.
+
+   The order made one thing clearer than the expansion ever did. The mask belongs to the
+   *screen*: the stripes were in the glass, at a pitch with nothing to do with what
+   resolution was being shown, so it is built in output pixels and rebuilt when the window
+   is resized. Scanlines belong to the *signal*: one per line the console drew, so their
+   spacing follows 240.
+
+   Three constants have reasons rather than history, and all three reasons are measurements
+   of screenshots:
+
+   - `CRT_LIFT` is a gamma curve and not a gain, because a gain clips. A mask can only
+     remove light and what it takes must be paid beforehand, but most NES colours already
+     have a channel at 255 where there is nowhere to pay: the linear gain took 42% of
+     Mario's sky and 16% of its red and green, and the sky turned lavender. A curve through
+     both ends has room everywhere between them.
+   - `CRT_STRIPE` is weak and `CRT_SCANLINE` is strong. Light removed evenly is a dimmer
+     television, which is correct; removed unevenly it is a different colour rather than a
+     darker one. A scanline dims all three channels together and so cannot shift a hue
+     however deep it goes, which is why it carries most of the effect.
+   - The beam profile is *integrated* over each output row rather than sampled once in it.
+     An 8:7 picture letterboxed into a 720-pixel window is 2.63 rows per line, so every line
+     meets the rows at a different phase; one sample per row put three seams at 98, 109 and
+     116 against a 135 line. On screen that is wide horizontal banding. Integrating has no
+     phase to be wrong about and closed form costs two cosines: the same measurement now
+     reads 3%.
+
+   A second look at it produced the other half of the feature. A television and a monitor
+   were *different glass*: a monitor, and a Trinitron, used an aperture grille with unbroken
+   stripes running the height of the tube, while most televisions used a slot mask, where
+   the colour columns run straight down just the same but each is broken into short slots
+   and the bridges between one column's slots sit half a slot from its neighbour's. A brick
+   wall stacked sideways. So there are two CRT entries rather than one, because neither is a
+   better version of the other.
+
+   Getting there took a wrong turn worth recording, because the wrong version was plausible
+   enough to build, test and screenshot. The first attempt staggered the *colours*
+   horizontally -- delta-gun triads on a hexagonal lattice, which some televisions did use.
+   That needs half of a three-pixel pitch, a pixel and a half, which no shift of an index
+   can express; the answer was to integrate the stripes across each output pixel the way the
+   beam is integrated across each row, which works exactly but leaves staggered columns at
+   half the stripe contrast, because a pixel straddling two stripes gets half of each.
+
+   A slot mask is both what was actually wanted and far less work. A slot's height is a
+   scanline's height -- the bridge is where the beam was already fading -- so the stagger
+   shifts the *beam* by half a line and needs no geometry at all. The beam integral takes a
+   position rather than an index, so it was already able to do this: the change deleted the
+   horizontal integration rather than adding anything.
+
+   Two things follow for free from it being a phase shift of a periodic profile. Shifting one
+   cannot change what a whole period integrates to, so a staggered column is exactly as
+   bright as an aligned one -- 112.4 against 112.5 average luma, measured on screen. And
+   alternating gaps break up the continuous dark rows a grille has, so the slot mask *bands
+   less* than the grille rather than more: 0.991 row-to-row uniformity against 0.968.
+
+   The mask is a plain function with a test beside it, so where the stripes fall, whether a
+   fractional scale bands, whether staggering costs light, and what the whole thing does to
+   brightness and to hue are all checked without a window. The hue test in particular exists
+   because a screenshot contradicted the design -- it is that measurement, written down.
+
+   One bug worth recording, because it was invisible in every screenshot: the light gun maps
+   window pixels to console pixels by undoing the renderer's scale, and only the X axis was
+   being corrected. Harmless while the logical height matched the picture, wrong the moment
+   the first CRT attempt made it three times taller. The rewrite moved it again -- there is
+   no logical size in CRT mode at all now, because the mask needs whole screen pixels -- so
+   it maps back through the same rectangle the picture was drawn into.
+6. **Dialogs and menus off Windows.** Both say so rather than opening nothing.
 
 ## Further out
 

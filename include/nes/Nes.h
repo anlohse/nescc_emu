@@ -75,6 +75,18 @@ public:
 	void reset();
 
 	/**
+	 * Pull the plug and put it back: the switch at the back, not the button on
+	 * the front.
+	 *
+	 * Clears the RAM, returns the registers to their power-on values and then
+	 * performs the reset that always follows one. A freshly constructed Nes is
+	 * already in this state, so this exists for the second time and afterwards
+	 * -- which is exactly what a "hard reset" in a menu means, and the only way
+	 * to get back a machine whose RAM a game has learned to recognise.
+	 */
+	void powerOn();
+
+	/**
 	 * Advance the system by one CPU instruction.
 	 *
 	 * Drains any OAM DMA stall first, then executes an instruction (or services
@@ -90,6 +102,41 @@ public:
 
 	/** Run until the PPU completes a frame. @return CPU cycles consumed. */
 	int stepFrame();
+
+	/**
+	 * Write the whole machine to @p path.
+	 *
+	 * Everything a running console holds: RAM, both chips' registers and
+	 * counters, the cartridge's own registers and work RAM, where the beam is,
+	 * and what the CPU was about to do. Not the ROM -- a state is not a copy of
+	 * the cartridge -- so it records enough about the ROM to refuse being
+	 * loaded into a different game.
+	 *
+	 * @return false with a reason in @p error, which is a file that could not
+	 *         be written or a machine with no cartridge in it.
+	 */
+	bool saveState(const std::string& path, std::string* error = nullptr);
+
+	/**
+	 * Restore a state written by saveState().
+	 *
+	 * Refuses a file from a different build, a different game, or one that has
+	 * been truncated, and says which -- and leaves the machine untouched when
+	 * it refuses, because a half-loaded console is worse than a rejected file.
+	 */
+	bool loadState(const std::string& path, std::string* error = nullptr);
+
+	/** Save or restore in memory, for a caller with its own storage. */
+	void serialize(State& state);
+
+	/**
+	 * What identifies the loaded cartridge in a save state.
+	 *
+	 * A cheap checksum over the PRG plus its size and mapper number. Enough to
+	 * catch loading Zelda's state into Mario, which is the mistake worth
+	 * catching; not a cryptographic claim about anything.
+	 */
+	std::uint64_t romFingerprint() const;
 
 	Registers& cpuRegisters() { return m_regs; }
 	const Registers& cpuRegisters() const { return m_regs; }
@@ -114,6 +161,7 @@ public:
 	double frameRate() const { return m_region == Region::Pal ? 50.0070 : 60.0988; }
 
 private:
+	void powerOnRegisters();
 	Registers m_regs;
 	std::unique_ptr<Cartridge> m_cartridge;
 	Ppu m_ppu;

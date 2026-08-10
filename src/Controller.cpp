@@ -80,4 +80,15 @@ std::uint8_t Controller::buttonFromName(const char* name) {
 	return 0;
 }
 
+void Controller::serialize(State& state) {
+	state.tag("CTRL");
+	state.value(m_buttons);
+	state.value(m_shift);
+	state.value(m_strobe);
+	state.value(m_device);
+	state.value(m_zapperX);
+	state.value(m_zapperY);
+	state.value(m_zapperTrigger);
+}
+
 } // namespace nes

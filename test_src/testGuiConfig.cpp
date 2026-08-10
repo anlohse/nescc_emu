@@ -208,3 +208,84 @@ TEST_CASE("section_and_key_names_are_case_insensitive") {
 	CHECK_EQ(c.scale, 2);
 	std::remove(path.c_str());
 }
+
+/* ----------------------------------------------------------------------- */
+/* Recent ROMs                                                              */
+/* ----------------------------------------------------------------------- */
+
+TEST_CASE("the_newest_rom_goes_to_the_front") {
+	Config c = Config::defaults();
+	c.noteRecentRom("a.nes");
+	c.noteRecentRom("b.nes");
+	REQUIRE_EQ(c.recentRoms.size(), 2u);
+	CHECK_EQ(c.recentRoms[0], "b.nes");
+	CHECK_EQ(c.recentRoms[1], "a.nes");
+}
+
+TEST_CASE("loading_the_same_rom_again_moves_it_rather_than_repeating_it") {
+	Config c = Config::defaults();
+	c.noteRecentRom("a.nes");
+	c.noteRecentRom("b.nes");
+	c.noteRecentRom("a.nes");
+	REQUIRE_EQ(c.recentRoms.size(), 2u);
+	CHECK_EQ(c.recentRoms[0], "a.nes");
+	CHECK_EQ(c.recentRoms[1], "b.nes");
+}
+
+TEST_CASE("the_same_path_spelled_differently_is_the_same_rom") {
+	// Windows hands back whatever spelling was typed, and the same game twice
+	// in a list of recent games is exactly what nobody wants.
+	Config c = Config::defaults();
+	c.noteRecentRom("C:/Games/Zelda.nes");
+	c.noteRecentRom("c:/games/zelda.NES");
+	CHECK_EQ(c.recentRoms.size(), 1u);
+	CHECK_EQ(c.recentRoms[0], "c:/games/zelda.NES");   // the newest spelling wins
+}
+
+TEST_CASE("the_list_is_capped") {
+	Config c = Config::defaults();
+	for (int i = 0; i < 20; i++)
+		c.noteRecentRom(std::to_string(i) + ".nes", 8);
+	CHECK_EQ(c.recentRoms.size(), 8u);
+	CHECK_EQ(c.recentRoms[0], "19.nes");
+	CHECK_EQ(c.recentRoms[7], "12.nes");
+}
+
+TEST_CASE("an_empty_path_is_not_remembered") {
+	Config c = Config::defaults();
+	c.noteRecentRom("");
+	CHECK(c.recentRoms.empty());
+}
+
+TEST_CASE("recent_roms_survive_a_round_trip_in_order") {
+	const std::string path = writeTemp("");
+	Config c = Config::defaults();
+	c.noteRecentRom("one.nes");
+	c.noteRecentRom("two with spaces.nes");
+	REQUIRE(c.save(path));
+
+	Config back = Config::defaults();
+	std::string warnings;
+	REQUIRE(back.load(path, &warnings));
+	CHECK_EQ(warnings, "");
+	REQUIRE_EQ(back.recentRoms.size(), 2u);
+	CHECK_EQ(back.recentRoms[0], "two with spaces.nes");
+	CHECK_EQ(back.recentRoms[1], "one.nes");
+	std::remove(path.c_str());
+}
+
+TEST_CASE("a_path_with_an_equals_sign_survives") {
+	// The ordinal is the key and the path is the value, so a path may contain
+	// anything at all -- which a naive "key = value" split on a path would not
+	// have managed.
+	const std::string path = writeTemp("");
+	Config c = Config::defaults();
+	c.noteRecentRom("D:/roms/weird = name.nes");
+	REQUIRE(c.save(path));
+
+	Config back = Config::defaults();
+	REQUIRE(back.load(path));
+	REQUIRE_EQ(back.recentRoms.size(), 1u);
+	CHECK_EQ(back.recentRoms[0], "D:/roms/weird = name.nes");
+	std::remove(path.c_str());
+}

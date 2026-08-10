@@ -68,6 +68,23 @@ void Config::setPluginSetting(const std::string& id, const std::string& key,
 	pluginSettings[lower(id) + "." + lower(key)] = value;
 }
 
+void Config::noteRecentRom(const std::string& path, std::size_t limit) {
+	if (path.empty())
+		return;
+	// Compared case-insensitively, because on Windows the same file arrives
+	// spelled differently depending on who typed it, and the same game twice in
+	// a list of recent games is exactly what nobody wants.
+	for (std::size_t i = 0; i < recentRoms.size(); i++) {
+		if (lower(recentRoms[i]) == lower(path)) {
+			recentRoms.erase(recentRoms.begin() + static_cast<long>(i));
+			break;
+		}
+	}
+	recentRoms.insert(recentRoms.begin(), path);
+	if (recentRoms.size() > limit)
+		recentRoms.resize(limit);
+}
+
 Config Config::defaults() {
 	Config c;
 
@@ -163,6 +180,15 @@ bool Config::load(const std::string& file, std::string* warnings) {
 			} else {
 				warn(warnings, where + "unknown setting '" + key + "'");
 			}
+			continue;
+		}
+
+		// The keys here are ordinals, not names: what matters is the order, and
+		// a path is the value rather than the key because a path may contain
+		// anything, equals signs included.
+		if (section == "recent") {
+			if (!value.empty())
+				recentRoms.push_back(value);
 			continue;
 		}
 
@@ -263,6 +289,14 @@ bool Config::save(const std::string& file) const {
 			const char* name = SDL_GetScancodeName(keys[port][i]);
 			os << BUTTON_NAMES[i] << " = " << (name && *name ? name : "") << "\n";
 		}
+		os << "\n";
+	}
+
+	if (!recentRoms.empty()) {
+		os << "# ROMs loaded before, most recent first. Delete a line to forget one.\n"
+		   << "[recent]\n";
+		for (std::size_t i = 0; i < recentRoms.size(); i++)
+			os << (i + 1) << " = " << recentRoms[i] << "\n";
 		os << "\n";
 	}
 

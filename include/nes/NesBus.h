@@ -2,6 +2,7 @@
 #define NES_NESBUS_H
 
 #include "Apu.h"
+#include "State.h"
 #include "Cartridge.h"
 #include "Controller.h"
 #include "Ppu.h"
@@ -121,6 +122,9 @@ public:
 
 	/** Instructions that made more bus accesses than they had cycles. Should be 0. */
 	unsigned long overrunInstructions() const { return m_overruns; }
+
+	/** Save or restore. @see nes/State.h */
+	void serialize(State& state);
 
 private:
 	/** One CPU cycle's worth of time, charged before an access is served. */

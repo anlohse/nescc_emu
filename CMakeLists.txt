@@ -53,6 +53,7 @@ add_library(nes_lib STATIC
     src/Mapper.cpp
     src/NesBus.cpp
     src/Nes.cpp
+    src/State.cpp
     src/Ppu.cpp
 )
 
@@ -100,6 +101,13 @@ if(NES_BUILD_GUI)
         src/frontend/SdlBackend.cpp
         src/frontend/SdlPlugin.cpp
         src/frontend/PluginSettings.cpp
+        src/frontend/MenuModel.cpp
+        src/frontend/KeysReference.cpp
+        src/frontend/CrtFilter.cpp
+        src/frontend/MenuBarWin32.cpp
+        src/frontend/MenuBarStub.cpp
+        src/frontend/FileDialogWin32.cpp
+        src/frontend/FileDialogStub.cpp
         src/frontend/SettingsDialogWin32.cpp
         src/frontend/SettingsDialogStub.cpp
         src/frontend/BindingModel.cpp
@@ -170,6 +178,7 @@ if(NES_BUILD_TESTS)
         test_src/testNestest.cpp
         test_src/testPpu.cpp
         test_src/testRegion.cpp
+        test_src/testState.cpp
     )
     target_link_libraries(nes_test PRIVATE nes_lib doctest::doctest)
 
@@ -235,7 +244,13 @@ if(NES_BUILD_GUI AND NES_BUILD_TESTS)
         test_src/testPluginSettings.cpp
         test_src/testBindingModel.cpp
         test_src/testHostServices.cpp
+        test_src/testMenuModel.cpp
+        test_src/testKeysReference.cpp
+        test_src/testCrtFilter.cpp
         src/GuiConfig.cpp
+        src/frontend/MenuModel.cpp
+        src/frontend/KeysReference.cpp
+        src/frontend/CrtFilter.cpp
         src/frontend/App.cpp
         src/frontend/HostServices.cpp
         src/frontend/PluginSettings.cpp
