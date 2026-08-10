@@ -715,6 +715,29 @@ void Ppu::writeRegister(std::uint16_t reg, std::uint8_t value) {
 		m_writeToggle = !m_writeToggle;
 		break;
 	case 7:
+		// A trace of where writes actually land, which is how the one that looked
+		// like a lost character in 4.Obscure was found to be landing at $30C0 --
+		// rendering having moved v out from under the CPU. Read once, because this
+		// is a hot path: a getenv per write is not free.
+		//
+		// NES_TRACE_VRAM=20C0 watches 32 bytes from there; =ALL watches letters.
+		{
+			static const char* const want = std::getenv("NES_TRACE_VRAM");
+			if (want) {
+				const std::uint16_t at =
+						static_cast<std::uint16_t>(m_vramAddr & 0x3FFF);
+				static const bool all = (want[0] == 'A');
+				static const unsigned low = all ? 0u
+						: static_cast<unsigned>(std::strtoul(want, nullptr, 16));
+				if (all ? (value >= 0x41 && value <= 0x5A)
+						: (at >= low && at < low + 0x20))
+					std::fprintf(stderr, "$2007 -> %04X = %02X  line %3d dot %3d"
+							"  rendering %d inc %d\n",
+							at, value, m_scanline, m_dot,
+							renderingEnabled() ? 1 : 0,
+							(m_ctrl & CTRL_INCREMENT_32) ? 32 : 1);
+			}
+		}
 		vramWrite(static_cast<std::uint16_t>(m_vramAddr & 0x3FFF), value);
 		m_vramAddr = static_cast<std::uint16_t>(
 				m_vramAddr + ((m_ctrl & CTRL_INCREMENT_32) ? 32 : 1));

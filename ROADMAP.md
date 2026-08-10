@@ -426,13 +426,32 @@ Roughly in order of how likely a real game is to notice:
   It also had a second defect worth naming: the flag was only evaluated when the
   sprite-enable bit was set. The evaluation runs whenever *rendering* does and never
   consults that bit.
-- **A `$2007` write lands in the wrong place, somewhere.** Found while reading
-  `sprite_overflow_tests/4.Obscure`, which draws its verdict as `S PA SED` -- the `S` meant
-  for column 4 appears at column 0 instead, and the picture agrees with the nametable, so
-  this is a genuinely misplaced write rather than a reading artefact. `1.Basics` uses the
-  same print routine and comes out clean, so whatever is wrong is timing-dependent. Worth
-  chasing before the remaining sprite-overflow ROMs, because the mangled word may well be
-  `PASSED` -- and because visible corruption in a game beats a test score.
+- ~~**A `$2007` write lands in the wrong place.**~~ Chased, and there is no bug in the write
+  path. Worth writing down because the conclusion is the opposite of the symptom.
+
+  `sprite_overflow_tests/4.Obscure` draws its verdict as `S PA SED`, and a trace of the
+  writes shows why: the third character goes to `$30C0` instead of `$20C4`, and `$30C0`
+  mirrors onto `$20C0`, which is column 0. `$20C4` becoming `$30C0` is precisely what the
+  rendering circuitry does to `v` -- fine Y increments by `0x1000` at the end of a line and
+  the reload at dot 257 puts coarse X back to zero. `v` is one register shared between the
+  CPU and the fetch logic, so a `$2007` write during rendering is corrupted on real hardware
+  in exactly this way. It is why every programming guide says not to do it.
+
+  So the question turns around: why is the ROM writing `$2007` while rendering? The trace
+  answers that too. It prints its title cleanly during vblank on lines 249 to 254, then
+  starts the verdict at line **261** and runs into lines 0, 1 and 2 -- the print routine
+  overran vblank. Something upstream is making it late, and the likeliest candidate is the
+  thing the neighbouring ROM is already complaining about: `3.Timing` says the overflow flag
+  is set at the wrong dot, and this ROM polls `$2002`. A flag that appears late makes a
+  polling loop run long.
+
+  Which makes the corruption a *symptom* of flag timing rather than a second defect, and
+  collapses two roadmap items into one.
+- **Set the overflow flag at the dot the evaluation reaches it.** The value is right now;
+  the timing is not. The flag is raised while the line is drawn, where the hardware raises it
+  during the evaluation that runs over dots 65 to 256 of the *previous* line, at whichever
+  dot the offending comparison happens. `3.Timing` measures that directly, and on the
+  evidence above `4.Obscure` depends on it as well.
 - **Poll interrupts within an instruction, in emu6502.** The core charges an instruction's
   cycles in one lump at the end, so an interrupt arriving partway through one cannot be
   seen. Root cause of all four `cpu_interrupts_v2` ROMs and a prerequisite for the three

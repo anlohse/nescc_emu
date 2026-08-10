@@ -415,13 +415,18 @@ const Known KNOWN_FAILURES[] = {
 	// dots, and famously goes wrong in a way the real chip reproduces exactly.
 	{ "sprite_overflow_tests/2.Details", "sprite overflow ignores the evaluation order" },
 	{ "sprite_overflow_tests/3.Timing",  "sprite overflow is set at the wrong dot" },
-	// Not a sprite problem at all, on the evidence. This one draws its verdict as
-	// "S PA SED" -- the S meant for column 4 lands at column 0 -- and the picture
-	// agrees with the nametable, so a $2007 write is going somewhere it should not.
-	// 1.Basics uses the same print routine and comes out clean, so whatever is
-	// wrong is timing-dependent, and the word being mangled may well be "PASSED".
-	// Chasing that is its own job; see ROADMAP.
-	{ "sprite_overflow_tests/4.Obscure", "a $2007 write lands 4 bytes early, mangling the verdict" },
+	// This one's verdict comes out as "S PA SED", and the cause is not a sprite
+	// problem or a lost write. A trace shows the third character going to $30C0
+	// rather than $20C4 -- which mirrors onto column 0 -- because rendering had
+	// moved v out from under the CPU between the two writes. That is what real
+	// hardware does to a $2007 write during rendering.
+	//
+	// It is writing during rendering because its print routine overran vblank: the
+	// title prints cleanly on lines 249-254 and the verdict starts at line 261.
+	// Being late is the actual fault, and the flag timing 3.Timing complains about
+	// is the likeliest reason -- this ROM polls $2002. So the word being mangled
+	// may well be "PASSED", and this entry probably clears when that one does.
+	{ "sprite_overflow_tests/4.Obscure", "its print overruns vblank, most likely waiting on the flag" },
 
 	// The older vblank suite, also newly visible. Its first five pass; these two
 	// are the same NMI-edge story as ppu_vbl_nmi's, from a different angle.
