@@ -126,28 +126,50 @@ TEST_CASE("a_disabled_channel_ignores_length_writes") {
 /* Frame counter                                                             */
 /* ------------------------------------------------------------------------ */
 
-TEST_CASE("a_game_that_never_writes_4017_gets_no_frame_irq") {
-	// A deliberate deviation from the documented power-up state, and the reason
-	// is a real game: Ikinari Musician never writes $4017 and never reads
-	// $4015, so an interrupt enabled at power-up is asserted forever. Its
-	// handler runs about 113 times a frame and writes $4015 = 0 every time,
-	// turning off every channel -- a music program with no sound.
+TEST_CASE("a_game_that_never_writes_4017_still_gets_a_frame_irq") {
+	// Powering up is as though a game had written $00 to $4017: the four-step
+	// sequence, and the frame interrupt *enabled*. One arrives whether anybody
+	// asked for it or not.
 	//
-	// Writing $4017 is the only way to select the sequence or know its phase,
-	// so a game that never writes it cannot be relying on the interrupt.
+	// This asserted the opposite for a long time, as a deliberate deviation,
+	// because the documented state silenced Ikinari Musician completely -- the
+	// interrupt asserted, was never acknowledged, and its handler ran about a
+	// hundred times a frame writing $4015 = 0. That is no longer true and it was
+	// measured rather than assumed: the game plays to the same peak and the same
+	// RMS over eleven seconds either way. The workaround outlived the fault, and
+	// cost two of blargg's apu_reset ROMs the whole time.
 	Apu apu;
-	apu.tick(FULL_SEQUENCE * 4);
-	CHECK_FALSE(apu.irqAsserted());
-	CHECK_EQ(apu.peekStatus() & Apu::STATUS_FRAME_IRQ, 0);
+	apu.tick(FULL_SEQUENCE + 10);
+	CHECK(apu.irqAsserted());
+	CHECK((apu.peekStatus() & Apu::STATUS_FRAME_IRQ) != 0);
 }
 
-TEST_CASE("writing_4017_with_the_inhibit_clear_turns_the_irq_on") {
-	// The other half of the deviation: asking for it still works.
+TEST_CASE("the_inhibit_bit_turns_the_frame_irq_off_and_on_again") {
 	Apu apu;
+	apu.writeRegister(0x4017, 0x40);          // 4-step, interrupt inhibited
+	apu.tick(4);                              // let the write's delay expire
 	apu.tick(FULL_SEQUENCE * 2);
-	REQUIRE_FALSE(apu.irqAsserted());
+	CHECK_FALSE(apu.irqAsserted());
 
-	apu.writeRegister(0x4017, 0x00);
+	apu.writeRegister(0x4017, 0x00);          // and asked for again
+	apu.tick(4);
+	apu.tick(FULL_SEQUENCE + 10);
+	CHECK(apu.irqAsserted());
+}
+
+TEST_CASE("a_reset_leaves_4017_alone_where_a_power_up_writes_it") {
+	// The difference the split exists for. Reset asserts a pin; it does not write
+	// $4017, so a game that inhibited the interrupt before one still has it
+	// inhibited afterwards. A power-up is the other switch and does write it.
+	Apu apu;
+	apu.writeRegister(0x4017, 0x40);          // 4-step, interrupt inhibited
+	apu.tick(4);
+
+	apu.reset();
+	apu.tick(FULL_SEQUENCE * 2);
+	CHECK_FALSE(apu.irqAsserted());
+
+	apu.powerOn();
 	apu.tick(FULL_SEQUENCE + 10);
 	CHECK(apu.irqAsserted());
 }
@@ -405,6 +427,66 @@ TEST_CASE("peeking_4015_does_not_acknowledge_the_irq") {
 
 	console.bus().read(0x4015);
 	CHECK_FALSE(console.apu().irqAsserted()); // the real read clears it
+}
+
+TEST_CASE("a_dmc_sample_lasts_the_cycles_the_rate_table_says") {
+	// The rate table's entries are whole CPU cycles per output step, unlike a
+	// pulse's period register, which holds one less than its period because its
+	// divider reloads after reaching zero. Loading a rate raw gives every DMC
+	// sample one cycle too many -- inaudible in a tune, and precisely what
+	// blargg's 8-dmc_rates measures.
+	//
+	// Measured through the DMC's own interrupt, which needs no ears -- and
+	// measured as a *difference* between two sample lengths, which is what makes
+	// it exact. The interrupt marks the last byte being fetched rather than the
+	// last bit being shifted out, so how long the channel takes to get going is
+	// mixed into any single reading. Sixteen extra bytes is 128 extra output
+	// steps whatever that startup cost is, so subtracting two readings cancels it
+	// and leaves the period alone.
+	std::vector<std::uint8_t> prg;
+	testrom::setResetVector(prg, 0xC000);
+	prg[0x0000] = 0x4C;                       // spin: the CPU is not the subject
+	prg[0x0001] = 0x00;
+	prg[0x0002] = 0xC0;
+	prg[0x1000] = 0xAA;                       // the sample, at $D000
+
+	const std::vector<std::uint8_t> image =
+			testrom::build(testrom::Options(), prg);
+
+	// @param lengthReg $4013: the sample is lengthReg * 16 + 1 bytes.
+	auto cyclesToIrq = [&image](std::uint8_t lengthReg) {
+		auto cart = Cartridge::fromINes(image);
+		REQUIRE(cart != nullptr);
+		Nes console;
+		console.setCartridge(std::move(cart));
+		console.reset();
+
+		Apu& apu = console.apu();
+		apu.writeRegister(0x4010, 0x80);      // IRQ on, no loop, rate index 0
+		apu.writeRegister(0x4012, 0x40);      // $C000 + 0x40 * 64 = $D000
+		apu.writeRegister(0x4013, lengthReg);
+		apu.writeRegister(0x4015, Apu::ENABLE_DMC);
+
+		int cycles = 0;
+		while (cycles < 200000) {
+			apu.tick(1);
+			cycles++;
+			if ((apu.readStatus() & Apu::STATUS_DMC_IRQ) != 0)
+				return cycles;
+		}
+		return -1;
+	};
+
+	const int seventeen = cyclesToIrq(0x01);
+	const int thirtyThree = cyclesToIrq(0x02);
+	REQUIRE(seventeen > 0);
+	REQUIRE(thirtyThree > 0);
+	CAPTURE(seventeen);
+	CAPTURE(thirtyThree);
+
+	// Sixteen more bytes is 128 more output steps, at 428 cycles each. One cycle
+	// of error per step would show up here as 128.
+	CHECK_EQ(thirtyThree - seventeen, 128 * 428);
 }
 
 TEST_CASE("the_frame_irq_reaches_the_cpu") {
