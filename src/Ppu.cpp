@@ -78,6 +78,7 @@ void Ppu::reset() {
 	m_dot = 0;
 	m_frame = 0;
 	m_nmiPending = false;
+	m_nmiDelay = 0;
 	m_sprite0HitDot = -1;
 	m_dotsSinceVblank = VBLANK_RACE_DOTS;
 	m_suppressVblank = false;
@@ -485,9 +486,18 @@ bool Ppu::lightAt(int x, int y) const {
 }
 
 bool Ppu::takeNmi() {
-	const bool pending = m_nmiPending;
+	if (!m_nmiPending)
+		return false;
+	if (m_nmiDelay > 0) {
+		// Raised too late in an instruction for the CPU to have sampled the
+		// line during it, so the interrupt waits for the one after. Hardware
+		// samples /NMI partway through each cycle; a write that pulls it down
+		// in its own final cycle misses that sample by a hair.
+		m_nmiDelay--;
+		return false;
+	}
 	m_nmiPending = false;
-	return pending;
+	return true;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -570,8 +580,15 @@ void Ppu::writeRegister(std::uint16_t reg, std::uint8_t value) {
 			redrawRestOfLine();
 		// Enabling NMI while the vblank flag is already up fires one
 		// immediately. Some games rely on this to start their frame loop.
-		if (!wasEnabled && (value & CTRL_NMI_ENABLE) && (m_status & STATUS_VBLANK))
+		//
+		// "Immediately" means after the instruction *following* this one. The
+		// write lands in this instruction's last cycle, which is past the point
+		// where the CPU samples /NMI, so the interrupt cannot be taken until
+		// the end of the next one.
+		if (!wasEnabled && (value & CTRL_NMI_ENABLE) && (m_status & STATUS_VBLANK)) {
 			m_nmiPending = true;
+			m_nmiDelay = 1;
+		}
 		m_tempAddr = static_cast<std::uint16_t>((m_tempAddr & 0xF3FF)
 				| ((value & 0x03) << 10));   // nametable select -> t
 		break;

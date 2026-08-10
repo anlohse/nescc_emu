@@ -245,9 +245,15 @@ const Known KNOWN_FAILURES[] = {
 	// interaction with enabling rendering. The $2002 race was built from
 	// reasoning about this and is only partly right, which is precisely what
 	// these ROMs are for.
+	//
+	// All six of these measure the same thing from different angles: which CPU
+	// cycle a PPU register access belongs to. The bus advances the PPU a whole
+	// cycle -- three dots -- before serving an access, so every one of them is
+	// dated late by up to that much. That is the next thing to test, and it is
+	// a change to when every device sees every access rather than a patch to
+	// any one of these.
 	{ "ppu_vbl_nmi/02-vbl_set_time",   "vblank flag set time is off by a dot" },
 	{ "ppu_vbl_nmi/03-vbl_clear_time", "vblank flag clear time is off by a dot" },
-	{ "ppu_vbl_nmi/04-nmi_control",    "NMI is taken a instruction too early" },
 	{ "ppu_vbl_nmi/05-nmi_timing",     "NMI timing at the vblank edge" },
 	{ "ppu_vbl_nmi/06-suppression",    "vblank suppression window is wrong" },
 	{ "ppu_vbl_nmi/08-nmi_off_timing", "NMI disable timing at the vblank edge" },

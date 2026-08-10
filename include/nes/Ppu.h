@@ -238,6 +238,11 @@ private:
 	// go again before the CPU ever samples it. Three dots decide it, so both
 	// sides have to be dated: how long ago the flag went up, and whether a read
 	// landed on the dot just before it was due to.
+	// How many instruction boundaries a raised NMI must wait through. Nonzero
+	// only when the line was pulled down too late in an instruction for the CPU
+	// to sample it there.
+	int m_nmiDelay;
+
 	int m_dotsSinceVblank;      // capped; large means "not near the boundary"
 	bool m_suppressVblank;      // a read got in first; the flag must not come up
 	unsigned long m_vblankRaces;

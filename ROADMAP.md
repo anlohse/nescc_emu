@@ -276,8 +276,25 @@ Roughly in order of how likely a real game is to notice:
   expected result: they all use one table for backgrounds and the other for sprites,
   where an A12 model and a per-scanline count agree exactly.
 
-  The largest clusters left are the dots around the vblank edge (7 ROMs) and interrupt
-  latency inside the CPU core (5).
+  The vblank cluster gave up one more: an NMI raised by enabling it in `$2000` while
+  the flag is already set is taken after the *next* instruction, not this one. The write
+  lands in its instruction's final cycle, past the point where the CPU samples /NMI. A
+  unit test here had asserted the opposite in as many words -- "fires immediately" -- so
+  it was wrong in the same direction as the code, which is the failure mode these ROMs
+  exist to catch. **43 of 93 pass.**
+
+  The six that remain in that cluster all measure one thing from different angles:
+  *which CPU cycle a PPU register access belongs to*. The bus advances the PPU a whole
+  cycle -- three dots -- before serving an access, so every access is dated up to three
+  dots late. Testing that is a change to when every device sees every access, not a
+  patch to any one ROM, and it wants its own sitting.
+
+  One dead end worth recording: `10-even_odd_timing` reports the odd-frame skip as
+  decided too late, and latching the rendering flag a dot earlier changed nothing it
+  measures. That change was reverted rather than kept -- an unproven behavioural change
+  that does not fix its test is worse than none.
+
+  The other large cluster is interrupt latency inside the CPU core (5 ROMs).
 - ~~**Bus conflicts** on UxROM and CNROM~~ — done, driven by the NES 2.0 submapper
   rather than guessed from the mapper number.
 - ~~**MMC1's consecutive-write rule.**~~ Done, and it needed fixing in the CPU first: a
