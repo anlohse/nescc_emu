@@ -57,8 +57,20 @@ public:
 	bool hasCartridge() const { return m_cartridge != nullptr; }
 
 	/**
-	 * Power-on / reset: clear RAM, set SP to $FD and the I flag, and load PC
-	 * from the reset vector at $FFFC. Charges the 7 cycles the sequence takes.
+	 * Press the reset button.
+	 *
+	 * A warm reset, which is far less than it sounds like. The 6502 does not
+	 * clear anything: it decrements the stack pointer three times, as though it
+	 * were pushing a return address and the status it never writes, sets the
+	 * interrupt disable, and jumps through the vector at $FFFC. The RAM keeps
+	 * every byte it held, and so do A, X and Y.
+	 *
+	 * That matters beyond conformance. A game can tell a warm boot from a cold
+	 * one by what survived, and blargg's `ram_after_reset` exists to catch an
+	 * emulator that wipes it -- which this did, until a test ROM said so.
+	 *
+	 * A freshly constructed Nes is already in its power-on state, so the first
+	 * call to this is the power-on reset. Charges the 7 cycles it takes.
 	 */
 	void reset();
 
