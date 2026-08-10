@@ -100,19 +100,22 @@ TEST_CASE("a_plugin_with_no_dialog_is_not_offered_one") {
 	CHECK(find(buildMenu(state), MENU_CONFIGURE_INPUT)->enabled);
 }
 
-TEST_CASE("what_is_not_built_yet_says_so_and_is_disabled") {
-	// The two must go together. An item that is enabled and does nothing is a
-	// bug report; one that is disabled without being marked is a mystery to
-	// whoever reads this next.
+TEST_CASE("nothing_on_the_bar_is_a_placeholder_any_more") {
+	// This list is empty now, and the check is kept rather than deleted: the next
+	// item somebody sketches in belongs here, and the rule it enforces -- that
+	// unimplemented and disabled go together -- is what makes sketching safe.
 	const std::vector<MenuSection> bar = buildMenu(loaded());
-	const int notYet[] = { MENU_HOTKEYS };
-	for (std::size_t i = 0; i < sizeof(notYet) / sizeof(notYet[0]); i++) {
-		CAPTURE(notYet[i]);
-		const MenuItem* item = find(bar, notYet[i]);
-		REQUIRE(item != nullptr);
-		CHECK(item->unimplemented);
-		CHECK_FALSE(item->enabled);
-	}
+	for (std::size_t s = 0; s < bar.size(); s++)
+		for (std::size_t i = 0; i < bar[s].items.size(); i++) {
+			const MenuItem& item = bar[s].items[i];
+			if (item.separator)
+				continue;
+			CAPTURE(item.label);
+			// Whatever is listed either works, or says plainly that it does not.
+			if (item.unimplemented)
+				CHECK_FALSE(item.enabled);
+		}
+	CHECK(find(bar, MENU_HOTKEYS)->enabled);
 }
 
 TEST_CASE("everything_that_is_enabled_is_implemented") {

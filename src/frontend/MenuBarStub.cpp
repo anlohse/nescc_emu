@@ -31,6 +31,9 @@ bool handleMenuCommand(unsigned, unsigned long long, long long) {
 void showAboutBox(void*, const char*) {
 }
 
+void showTextBox(void*, const char*, const std::string&) {
+}
+
 } // namespace nesfe
 
 #endif // !_WIN32

@@ -11,6 +11,7 @@
 #include "frontend/App.h"
 #include "frontend/HostServices.h"
 #include "frontend/FileDialog.h"
+#include "frontend/KeysReference.h"
 #include "frontend/MenuBar.h"
 #include "frontend/SdlBackend.h"
 #include "frontend/PluginSettings.h"
@@ -591,6 +592,14 @@ int main(int argc, char* argv[]) {
 			break;
 		case nesfe::MENU_CONFIGURE_PLUGINS:
 			app.postCommand(nesfe::COMMAND_SETTINGS);
+			break;
+		case nesfe::MENU_HOTKEYS:
+			// Built from the configuration each time it is opened, so a binding
+			// changed a minute ago is what it describes.
+			app.dropDeadline();
+			nesfe::showTextBox(video.nativeWindow(), "Keys and Buttons",
+					nesfe::keysReferenceText(config));
+			app.dropDeadline();
 			break;
 		case nesfe::MENU_ABOUT:
 			app.dropDeadline();

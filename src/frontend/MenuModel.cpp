@@ -138,7 +138,7 @@ std::vector<MenuSection> buildMenu(const MenuState& state) {
 	{
 		MenuSection s;
 		s.label = "&Help";
-		s.items.push_back(todo(MENU_HOTKEYS, "&Keys and Buttons"));
+		s.items.push_back(entry(MENU_HOTKEYS, "&Keys and Buttons"));
 		s.items.push_back(separator());
 		s.items.push_back(entry(MENU_ABOUT, "&About"));
 		bar.push_back(s);

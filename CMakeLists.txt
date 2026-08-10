@@ -102,6 +102,7 @@ if(NES_BUILD_GUI)
         src/frontend/SdlPlugin.cpp
         src/frontend/PluginSettings.cpp
         src/frontend/MenuModel.cpp
+        src/frontend/KeysReference.cpp
         src/frontend/MenuBarWin32.cpp
         src/frontend/MenuBarStub.cpp
         src/frontend/FileDialogWin32.cpp
@@ -243,8 +244,10 @@ if(NES_BUILD_GUI AND NES_BUILD_TESTS)
         test_src/testBindingModel.cpp
         test_src/testHostServices.cpp
         test_src/testMenuModel.cpp
+        test_src/testKeysReference.cpp
         src/GuiConfig.cpp
         src/frontend/MenuModel.cpp
+        src/frontend/KeysReference.cpp
         src/frontend/App.cpp
         src/frontend/HostServices.cpp
         src/frontend/PluginSettings.cpp

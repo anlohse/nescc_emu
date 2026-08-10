@@ -478,7 +478,18 @@ ROM could only be opened from a command line.
    against an edge that never happened), the delayed I flag (or restoring inside
    `CLI; SEI` takes an interrupt the real machine would not), the PAL dot remainder, and
    the APU's filter history -- three floats, without which a restore clicks.
-4. **Dialogs and menus off Windows.** Both say so rather than opening nothing.
+4. ~~**Keys and Buttons.**~~ Done, and it is the last item on the bar: everything listed
+   in the menu now does something.
+
+   Built from the configuration each time it opens, not from a table written alongside it.
+   That is the whole design decision, and the test that matters says so directly: rebind A
+   to Q and the page has to say Q. A reference that drifts from the bindings is not merely
+   useless, it tells a person something untrue.
+
+   A read-only edit control rather than a message box, because thirty lines need to scroll
+   and two columns need a fixed pitch to line up -- and because being able to select a line
+   and copy it is a reasonable thing to want from a page listing what your keys do.
+5. **Dialogs and menus off Windows.** Both say so rather than opening nothing.
 
 ## Further out
 
