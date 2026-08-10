@@ -467,6 +467,22 @@ Roughly in order of how likely a real game is to notice:
   Y = 5 cover scanlines 6 to 13, so an arrangement that trips the flag trips it for every one
   of them, and the first is what is observable. Aiming at line 9 found the flag already up --
   correct behaviour, and the test's error.
+- ~~**Open bus, on the CPU side.**~~ Done. An address that decodes to no device left the
+  data lines undriven, so a read comes back with whatever was last on them -- and this
+  returned a hardcoded zero, which is a value the hardware never gives. The bus now
+  remembers the last byte it carried, in one place rather than at each decode branch, and
+  both reads and writes update it because both drive the lines.
+
+  Three regions needed it: the APU's write-only registers at `$4000-$4013` and `$4014`, the
+  test space at `$4018-$401F` that the 2A03 never decoded, and `$4020-$40FF`, which no board
+  implemented here decodes either -- NROM, UxROM, CNROM, AxROM, MMC1, MMC3 and mapper 87 all
+  begin at `$6000`. That last one is a board-level claim rather than a chip-level one and is
+  commented as such, because a Famicom Disk System would need it back.
+
+  `cpu_exec_space/test_cpu_exec_space_apu` passes. **71 of 93.** Worth watching the ROM's own
+  output while fixing it: it walks the region address by address, so it printed `4000` and
+  stopped, then `4000 4001 ... 401F 4020` and stopped -- which said exactly where the next
+  gap was without any guessing.
 - **Poll interrupts within an instruction, in emu6502.** The core charges an instruction's
   cycles in one lump at the end, so an interrupt arriving partway through one cannot be
   seen. Root cause of all four `cpu_interrupts_v2` ROMs and a prerequisite for the three

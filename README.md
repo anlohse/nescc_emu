@@ -638,7 +638,7 @@ copyleft does not reach this code.
 The short list below is the immediate work; [ROADMAP.md](ROADMAP.md) has the longer
 view, including the backend-interface design and what would be needed for a 1.0.
 
-1. The rest of blargg's suites. **70 of 93 pass, and all 93 are now judged** — the older
+1. The rest of blargg's suites. **71 of 93 pass, and all 93 are now judged** — the older
    suites report by drawing on the screen rather than through `$6000`, and the nametable is
    read back as text to get their verdict, which turned 25 unjudged ROMs into 19 quiet
    passes and 6 failures nobody had seen. The largest clusters left are sprite overflow

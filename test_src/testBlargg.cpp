@@ -385,7 +385,6 @@ const Known KNOWN_FAILURES[] = {
 	// or $4015, which is what these check.
 	{ "instr_misc/04-dummy_reads_apu", "the SHx family makes no dummy read" },
 	{ "ppu_read_buffer/test_ppu_read_buffer", "no dummy read on indexed addressing" },
-	{ "cpu_exec_space/test_cpu_exec_space_apu",   "unmapped $4018-$40FF should read as open bus" },
 	{ "cpu_exec_space/test_cpu_exec_space_ppuio", "RTS does not do its dummy fetch" },
 
 	// SYA and SXA (also called SHY/SHX) are unstable on real hardware: what
