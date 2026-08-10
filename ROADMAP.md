@@ -387,6 +387,31 @@ Roughly in order of how likely a real game is to notice:
   redraws changed a single pixel, because the split lands on a uniform band of sky where
   a few pixels of horizontal shift look exactly the same. The behaviour is real and now
   correct; nothing available demonstrates it, so it is pinned by unit tests instead.
+- ~~**Read the verdict off the screen.**~~ Done, and it was the best-value thing left on
+  this list by a distance. A quarter of the suite -- 25 of 93 ROMs -- predates blargg's
+  `$6000` protocol and reports by drawing on the screen, so the gate had been running them,
+  proving only that they did not hang, and counting them as "no result". They were not
+  unjudgeable, just unjudged.
+
+  Those ROMs draw with a font whose tiles **are** the ASCII codes, so the nametable is the
+  text: read it back and a screenshot becomes a string a test can assert on. No offset, no
+  per-ROM table, twenty lines of code. The proof it is the right mapping rather than a lucky
+  guess is that the blank tile is `0x20` -- it is a space because a space is what it means.
+  A first attempt added `0x20` to every index and read plausible lower-case English, which
+  was pure coincidence: `'S'` plus `0x20` is `'s'`, so the whole screen lower-cased itself
+  and looked right while every blank came back as `'@'`.
+
+  What it found is the argument for having done it. **19 of the 25 were passing silently** --
+  including all eleven sprite-zero-hit ROMs and five of the older vblank suite -- and those
+  are now locked in, so a regression in sprite-zero timing can no longer pass unnoticed.
+  **6 were failing invisibly:** four of the five sprite-overflow ROMs, and two more NMI-edge
+  cases. Sprite overflow matters, because games read that bit; the fifth, `5.Emulator`, is
+  the one that passes, and it is the one testing what an emulator gets right by accident.
+
+  **68 of 93 now pass and all 93 are judged.** The verdict is taken from the *pass* rather
+  than the failure, deliberately: `PASSED` is the same word in every suite where the failure
+  text is not, and one ROM's came back as `FA LED` because those fonts keep a narrower `I`
+  outside the ASCII run. Anything that is not a pass is a failure either way.
 - **A decimal-mode switch in emu6502**: the 2A03 ignores the `D` flag in `ADC`/`SBC`
   and the core implements full BCD. No commercial game depends on this, which is why it
   is this far down.

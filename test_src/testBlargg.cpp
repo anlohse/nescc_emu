@@ -64,7 +64,79 @@ struct Outcome {
 	Kind kind = NO_PROTOCOL;
 	int status = 0;
 	std::string message;
+	/** What the ROM drew, for the half of them that report that way. */
+	std::string screen;
 };
+
+/**
+ * The picture, read back as text.
+ *
+ * Half of these suites predate the $6000 protocol and report by drawing on the
+ * screen, which left them unjudgeable here -- running one proved only that it
+ * did not crash. But they draw with a font whose tiles *are* the ASCII codes, so
+ * the nametable is the text: no offset, no table, the tile index is the
+ * character. Reading it back turns a screenshot into a string a test can assert
+ * on, which is the difference between 25 unknowns and 25 knowns.
+ *
+ * The blank tile being 0x20 is what proves the mapping rather than a lucky
+ * guess: it is a space because a space is what it means. A first attempt added
+ * 0x20 to every index and read plausible lower-case English, which was pure
+ * coincidence -- 'S' plus 0x20 is 's', so the screen lower-cased itself and
+ * looked right while every blank came out as '@'.
+ */
+std::string screenText(nes::Nes& console) {
+	std::string out;
+	const nes::Ppu& ppu = console.ppu();
+	for (int row = 0; row < 30; row++) {
+		std::string line;
+		for (int column = 0; column < 32; column++) {
+			const std::uint16_t at = static_cast<std::uint16_t>(
+					0x2000 + row * 32 + column);
+			const int tile = ppu.vramRead(at);
+			line += (tile >= 0x20 && tile < 0x7F)
+					? static_cast<char>(tile) : ' ';
+		}
+		// Trailing blanks are the empty right-hand side of the screen.
+		while (!line.empty() && line[line.size() - 1] == ' ')
+			line.erase(line.size() - 1);
+		if (!line.empty())
+			out += line + "\n";
+	}
+	return out;
+}
+
+/** The screen as one line, for a message that has to fit on one. */
+std::string oneLine(const std::string& screen) {
+	std::string out;
+	for (std::size_t i = 0; i < screen.size(); i++) {
+		const char c = screen[i] == '\n' ? ' ' : screen[i];
+		// Collapse runs of blanks; the screen is mostly blank by area.
+		if (c == ' ' && !out.empty() && out[out.size() - 1] == ' ')
+			continue;
+		out += c;
+	}
+	return out;
+}
+
+/**
+ * The verdict of a ROM that only draws one.
+ *
+ * Looks for the pass rather than the failure, deliberately. "PASSED" is the same
+ * word in every one of these suites, where the failure text is not -- and one
+ * ROM's came back as "FA LED", missing a glyph. That gap is in the nametable
+ * rather than in the reading: those fonts keep a narrower 'I' outside the ASCII
+ * run, so the cell holds a tile this cannot name. It costs nothing here, because
+ * anything that is not a pass is a failure either way.
+ */
+Outcome::Kind judgeScreen(const std::string& screen) {
+	if (screen.find("PASSED") != std::string::npos
+			|| screen.find("Passed") != std::string::npos)
+		return Outcome::PASSED;
+	// A screen with no verdict on it at all: still genuinely unreadable.
+	if (screen.empty())
+		return Outcome::NO_PROTOCOL;
+	return Outcome::FAILED;
+}
 
 bool shellIsRunning(nes::Nes& console) {
 	// The magic appears only once the shell has started, so a status byte read
@@ -181,7 +253,18 @@ Outcome run(const std::string& path, std::string* error) {
 		return outcome;
 	}
 
-	outcome.kind = sawShell ? Outcome::HUNG : Outcome::NO_PROTOCOL;
+	if (sawShell) {
+		// The shell was talking and then stopped, which is a hang whatever is on
+		// the screen.
+		outcome.kind = Outcome::HUNG;
+		return outcome;
+	}
+
+	// Nothing came through $6000, so the answer is on the screen if it is
+	// anywhere -- and for these suites it is.
+	outcome.screen = screenText(console);
+	outcome.kind = judgeScreen(outcome.screen);
+	outcome.message = oneLine(outcome.screen);
 	return outcome;
 }
 
@@ -294,6 +377,26 @@ const Known KNOWN_FAILURES[] = {
 	{ "apu_reset/4017_timing",      "the frame IRQ arrives 4 cycles late from cold" },
 	{ "apu_reset/len_ctrs_enabled", "length counters are not enabled at reset" },
 
+	// Sprite overflow: the $2002 bit that says more than eight sprites landed on
+	// a line. Four of the five fail, and they were invisible until the screen
+	// could be read -- these suites predate the $6000 protocol, so the gate had
+	// been counting them as "no result" and moving on. Games do use this bit, so
+	// unlike the decay and corruption entries below, this is worth fixing.
+	//
+	// The one that passes is 5.Emulator, which is the tell: it checks the parts an
+	// emulator gets right by accident. The other four check the hardware's actual
+	// sprite evaluation -- which reads OAM in a particular order, at particular
+	// dots, and famously goes wrong in a way the real chip reproduces exactly.
+	{ "sprite_overflow_tests/1.Basics",  "sprite overflow is counted, not evaluated" },
+	{ "sprite_overflow_tests/2.Details", "sprite overflow ignores the evaluation order" },
+	{ "sprite_overflow_tests/3.Timing",  "sprite overflow is set at the wrong dot" },
+	{ "sprite_overflow_tests/4.Obscure", "the overflow bug's OAM misalignment" },
+
+	// The older vblank suite, also newly visible. Its first five pass; these two
+	// are the same NMI-edge story as ppu_vbl_nmi's, from a different angle.
+	{ "vbl_nmi_timing/6.nmi_disable", "NMI disable timing at the vblank edge" },
+	{ "vbl_nmi_timing/7.nmi_timing",  "which CPU cycle the NMI is taken on" },
+
 	// Two smaller ones, each a piece of hardware that decays or corrupts in a
 	// way nothing here models yet.
 	{ "ppu_open_bus/ppu_open_bus", "PPU open bus does not decay" },
@@ -371,10 +474,10 @@ TEST_CASE("blargg_test_roms") {
 			}
 			break;
 		case Outcome::NO_PROTOCOL:
-			// An older ROM that reports on screen only. Running it still proves
-			// it does not crash the emulator, which is worth something, but
-			// there is no result to read.
+			// An older ROM that reports on screen only.
 			noProtocol++;
+			if (std::getenv("NES_ROM_SCREEN"))
+				MESSAGE("screen of ", label, ":\n", outcome.screen);
 			break;
 		case Outcome::HUNG:
 			hung++;

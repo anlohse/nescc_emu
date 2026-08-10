@@ -638,10 +638,13 @@ copyleft does not reach this code.
 The short list below is the immediate work; [ROADMAP.md](ROADMAP.md) has the longer
 view, including the backend-interface design and what would be needed for a 1.0.
 
-1. The rest of blargg's suites. 48 of 93 pass; the largest clusters left are the dots
-   around the vblank edge and interrupt latency inside the CPU core, each listed with its
-   cause in `test_src/testBlargg.cpp`. nestest would still be worth having as a trace to
-   compare against, whenever that ROM's licensing is clear.
+1. The rest of blargg's suites. **68 of 93 pass, and all 93 are now judged** — the older
+   suites report by drawing on the screen rather than through `$6000`, and the nametable is
+   read back as text to get their verdict, which turned 25 unjudged ROMs into 19 quiet
+   passes and 6 failures nobody had seen. The largest clusters left are sprite overflow
+   evaluation, the dots around the vblank edge, and interrupt latency inside the CPU core,
+   each listed with its cause in `test_src/testBlargg.cpp`. nestest would still be worth
+   having as a trace to compare against, whenever that ROM's licensing is clear.
 2. Save states — the console's whole state is a handful of plain structs, so this is
    mostly a serialisation exercise, and it makes debugging the harder games practical.
 4. Famicom expansion audio, if a cart that uses it ever turns up. VRC6 is the usual
