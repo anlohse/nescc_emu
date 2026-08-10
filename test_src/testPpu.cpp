@@ -429,6 +429,82 @@ TEST_CASE("sprites_behind_the_background_stay_hidden") {
 	CHECK_EQ(pixelAt(ppu, 0, 4), 0x11);   // opaque background wins
 }
 
+/*
+ * Sprite overflow, which is not a count.
+ *
+ * $2002 bit 5 is set by the hardware's own sprite evaluation, and that evaluation
+ * has a famous defect: once eight sprites are in range it advances the byte index
+ * as well as the sprite index, so it starts comparing tile numbers, attributes
+ * and X positions against the scanline as though they were Y coordinates.
+ *
+ * Both directions are checked below, because a counting implementation passes the
+ * ordinary cases and fails exactly these two. The false negative is the decisive
+ * one: no count can produce it.
+ */
+namespace {
+
+/** OAM cleared to a Y far away from any line under test. */
+void clearOam(Ppu& ppu, std::uint8_t away) {
+	for (int i = 0; i < 256; i++)
+		ppu.writeOam(static_cast<std::uint8_t>(i), away);
+}
+
+/** A sprite whose Y puts it on scanlines y+1 .. y+8. */
+void putSprite(Ppu& ppu, int index, std::uint8_t y, std::uint8_t tile,
+		std::uint8_t attr, std::uint8_t x) {
+	ppu.writeOam(static_cast<std::uint8_t>(index * 4 + 0), y);
+	ppu.writeOam(static_cast<std::uint8_t>(index * 4 + 1), tile);
+	ppu.writeOam(static_cast<std::uint8_t>(index * 4 + 2), attr);
+	ppu.writeOam(static_cast<std::uint8_t>(index * 4 + 3), x);
+}
+
+} // namespace
+
+TEST_CASE("nine_sprites_on_a_line_can_leave_the_overflow_flag_clear") {
+	// The false negative, and the case that proves this is an evaluation rather
+	// than a tally. Nine sprites really are on scanline 10 -- eight of them in
+	// slots 0 to 7, the ninth in slot 9 -- and the flag stays clear, because by
+	// the time the hardware reaches slot 9 its byte index has slipped to 1 and it
+	// reads that sprite's *tile number* where its Y coordinate should be.
+	auto cart = makeCart();
+	Ppu ppu(cart.get());
+
+	clearOam(ppu, 200);                   // nothing else near scanline 10
+	for (int i = 0; i < 8; i++)
+		putSprite(ppu, i, 5, 1, 0, 0);    // eight on scanlines 6..13
+
+	// Slot 8 misses the line, which is what knocks the two indices out of step.
+	putSprite(ppu, 8, 200, 200, 200, 200);
+	// Slot 9 is on the line -- but its tile, which is what gets read instead, is
+	// not. A count would see a ninth sprite here and set the flag.
+	putSprite(ppu, 9, 5, 200, 200, 200);
+
+	ppu.writeRegister(1, Ppu::MASK_SHOW_BACKGROUND | Ppu::MASK_SHOW_SPRITES);
+	ppu.tick(dotsTo(12, 0));
+	CHECK_EQ(ppu.peekRegister(2) & Ppu::STATUS_OVERFLOW, 0);
+}
+
+TEST_CASE("eight_sprites_on_a_line_can_still_set_the_overflow_flag") {
+	// And the false positive. Only eight sprites are on scanline 10, so a count
+	// would leave the flag clear -- but after the eighth the hardware reads slot
+	// 8's tile number as a Y coordinate, and that byte is on the line.
+	auto cart = makeCart();
+	Ppu ppu(cart.get());
+
+	clearOam(ppu, 200);
+	for (int i = 0; i < 8; i++)
+		putSprite(ppu, i, 5, 1, 0, 0);
+
+	// Slot 8's Y misses, so the indices slip; slot 9's tile number is read next
+	// and it is in range for scanline 10.
+	putSprite(ppu, 8, 200, 200, 200, 200);
+	putSprite(ppu, 9, 200, 5, 200, 200);
+
+	ppu.writeRegister(1, Ppu::MASK_SHOW_BACKGROUND | Ppu::MASK_SHOW_SPRITES);
+	ppu.tick(dotsTo(12, 0));
+	CHECK((ppu.peekRegister(2) & Ppu::STATUS_OVERFLOW) != 0);
+}
+
 TEST_CASE("sprite_zero_hit_is_reported_when_it_overlaps_the_background") {
 	auto cart = makeCart();
 	Ppu ppu(cart.get());

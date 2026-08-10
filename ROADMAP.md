@@ -412,6 +412,32 @@ Roughly in order of how likely a real game is to notice:
   than the failure, deliberately: `PASSED` is the same word in every suite where the failure
   text is not, and one ROM's came back as `FA LED` because those fonts keep a narrower `I`
   outside the ASCII run. Anything that is not a pass is a failure either way.
+- ~~**Evaluate sprites instead of counting them.**~~ Done. `$2002` bit 5 was set by
+  counting in-range sprites and tripping at nine, which is the one thing the hardware does
+  not do. The real PPU walks OAM with two indices -- one for the sprite, one for the byte
+  within it -- and once eight sprites are in range they stop advancing together, so it
+  begins comparing tile numbers, attributes and X positions against the scanline as though
+  they were Y coordinates. That misalignment is the whole of the overflow bug and it cuts
+  both ways: nine sprites on a line can leave the flag clear, and eight can set it.
+
+  Both directions are pinned by unit tests, because the false negative is the one no count
+  can produce. `sprite_overflow_tests/1.Basics` passes; **69 of 93**.
+
+  It also had a second defect worth naming: the flag was only evaluated when the
+  sprite-enable bit was set. The evaluation runs whenever *rendering* does and never
+  consults that bit.
+- **A `$2007` write lands in the wrong place, somewhere.** Found while reading
+  `sprite_overflow_tests/4.Obscure`, which draws its verdict as `S PA SED` -- the `S` meant
+  for column 4 appears at column 0 instead, and the picture agrees with the nametable, so
+  this is a genuinely misplaced write rather than a reading artefact. `1.Basics` uses the
+  same print routine and comes out clean, so whatever is wrong is timing-dependent. Worth
+  chasing before the remaining sprite-overflow ROMs, because the mangled word may well be
+  `PASSED` -- and because visible corruption in a game beats a test score.
+- **Poll interrupts within an instruction, in emu6502.** The core charges an instruction's
+  cycles in one lump at the end, so an interrupt arriving partway through one cannot be
+  seen. Root cause of all four `cpu_interrupts_v2` ROMs and a prerequisite for the three
+  `ppu_vbl_nmi` edge cases: up to seven of the remaining failures from one change. Also the
+  most invasive thing left, which is why it is behind the write bug above.
 - **A decimal-mode switch in emu6502**: the 2A03 ignores the `D` flag in `ADC`/`SBC`
   and the core implements full BCD. No commercial game depends on this, which is why it
   is this far down.

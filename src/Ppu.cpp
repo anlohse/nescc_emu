@@ -284,6 +284,51 @@ void Ppu::updateA12() {
 /* Rendering                                                                  */
 /* ------------------------------------------------------------------------- */
 
+bool Ppu::evaluateSpriteOverflow(int line, int height) const {
+	// $2002 bit 5, and it is not "were there more than eight sprites". The
+	// hardware walks OAM with two indices -- n for the sprite, m for the byte
+	// within it -- and once eight sprites are in range it stops incrementing them
+	// as a pair. From there n and m both advance, so the byte it reads as a Y
+	// coordinate is the next sprite's *tile number*, then an *attribute*, then an
+	// *X position*, then a Y again. It is comparing the wrong bytes against the
+	// scanline, and whatever they happen to contain decides the flag.
+	//
+	// That misalignment is the whole of the famous overflow bug, and it cuts both
+	// ways: a line with nine sprites can leave the flag clear, and a line with
+	// three can set it. Counting instead gets the common case right and every
+	// interesting case wrong, which is exactly the shape of blargg's results --
+	// 5.Emulator passed, because it tests what an emulator gets right by accident,
+	// while Basics, Details, Timing and Obscure all failed.
+	int n = 0;                 // which sprite
+	int m = 0;                 // which byte of it, and the source of the trouble
+	int found = 0;
+
+	while (n < 64) {
+		// Sprite data is delayed a scanline, so OAM holds top - 1. Same
+		// convention as the renderer above, deliberately: these two have to agree
+		// about what "in range" means or the flag contradicts the picture.
+		const int row = line - m_oam[n * 4 + m] - 1;
+		const bool inRange = (row >= 0 && row < height);
+
+		if (found < 8) {
+			// Still filling the eight slots. m is zero throughout this phase --
+			// copying a sprite walks m through 1, 2, 3 and back to 0 -- so this
+			// really is reading a Y coordinate.
+			if (inRange)
+				found++;
+			n++;
+			continue;
+		}
+
+		// Eight found. Now the reads go wrong.
+		if (inRange)
+			return true;
+		n++;
+		m = (m + 1) & 3;       // and no carry into n, which is the bug
+	}
+	return false;
+}
+
 void Ppu::renderScanline(int line, int fromX) {
 	std::uint8_t* row = m_framebuffer.data() + line * SCREEN_WIDTH;
 	const bool wholeLine = fromX <= 0;
@@ -338,6 +383,8 @@ void Ppu::renderScanline(int line, int fromX) {
 				bgPattern[x] = 0;
 	}
 
+	/* -- see evaluateSpriteOverflow below for why the flag is not a count -- */
+
 	// Sprites are evaluated once per line and do not move partway across it:
 	// hardware picks them during the previous line and latches their patterns,
 	// so a redraw of the tail reuses what was found at the start.
@@ -353,6 +400,16 @@ void Ppu::renderScanline(int line, int fromX) {
 		m_sprIsZero.fill(false);
 	}
 
+	// The overflow flag is the hardware's own evaluation and not a count, so it is
+	// worked out separately -- and it happens whenever *rendering* is on, not only
+	// when sprites are being shown, because the evaluation is what runs and it
+	// does not consult the sprite-enable bit.
+	if (wholeLine && renderingEnabled()) {
+		const int height = (m_ctrl & CTRL_SPRITE_SIZE_16) ? 16 : 8;
+		if (evaluateSpriteOverflow(line, height))
+			m_status |= STATUS_OVERFLOW;
+	}
+
 	if (wholeLine && (m_mask & MASK_SHOW_SPRITES)) {
 		const int height = (m_ctrl & CTRL_SPRITE_SIZE_16) ? 16 : 8;
 		int found = 0;
@@ -364,10 +421,11 @@ void Ppu::renderScanline(int line, int fromX) {
 			if (rowInSprite < 0 || rowInSprite >= height)
 				continue;
 
-			if (++found > 8) {
-				m_status |= STATUS_OVERFLOW;
+			// Only the first eight are drawn. The ninth and beyond are dropped
+			// here; whether the *flag* is set is a different question, answered
+			// above by the evaluation rather than by this count.
+			if (++found > 8)
 				break;
-			}
 
 			const std::uint8_t tile = m_oam[i * 4 + 1];
 			const std::uint8_t attr = m_oam[i * 4 + 2];

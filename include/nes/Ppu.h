@@ -172,6 +172,17 @@ private:
 	 */
 	void renderScanline(int line, int fromX = 0);
 
+	/**
+	 * Whether $2002's overflow bit should be set for @p line.
+	 *
+	 * Not a count of sprites. The hardware walks OAM with a sprite index and a
+	 * byte index, and once eight sprites are in range the two stop advancing
+	 * together -- so it starts testing tile numbers, attributes and X positions
+	 * against the scanline as though they were Y coordinates. That is the overflow
+	 * bug, and it produces false negatives as readily as false positives.
+	 */
+	bool evaluateSpriteOverflow(int line, int height) const;
+
 	/** Redraw the rest of the current line, if a write just changed how it looks. */
 	void redrawRestOfLine();
 	void incrementY();

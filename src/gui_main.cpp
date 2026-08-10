@@ -231,7 +231,10 @@ int main(int argc, char* argv[]) {
 					nullptr);
 			return 1;
 		}
-		console.reset();
+		// A power-up, like the menu's Load ROM does. Starting one way from the
+		// command line and another way from the menu meant the same game could
+		// behave differently depending on how it was opened.
+		console.powerOn();
 	}
 
 	// Audio and gamepads are both requested but not required: a machine with no

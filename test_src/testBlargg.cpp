@@ -84,14 +84,14 @@ struct Outcome {
  * coincidence -- 'S' plus 0x20 is 's', so the screen lower-cased itself and
  * looked right while every blank came out as '@'.
  */
-std::string screenText(nes::Nes& console) {
+std::string screenText(nes::Nes& console, std::uint16_t base) {
 	std::string out;
 	const nes::Ppu& ppu = console.ppu();
 	for (int row = 0; row < 30; row++) {
 		std::string line;
 		for (int column = 0; column < 32; column++) {
 			const std::uint16_t at = static_cast<std::uint16_t>(
-					0x2000 + row * 32 + column);
+					base + row * 32 + column);
 			const int tile = ppu.vramRead(at);
 			line += (tile >= 0x20 && tile < 0x7F)
 					? static_cast<char>(tile) : ' ';
@@ -262,7 +262,33 @@ Outcome run(const std::string& path, std::string* error) {
 
 	// Nothing came through $6000, so the answer is on the screen if it is
 	// anywhere -- and for these suites it is.
-	outcome.screen = screenText(console);
+	// Every nametable, not just the first: which one a ROM draws into is its own
+	// business. Identical pages are skipped because mirroring makes two of the
+	// four aliases of each other on any real board.
+	std::string previous;
+	for (std::uint16_t base = 0x2000; base < 0x3000; base += 0x400) {
+		const std::string page = screenText(console, base);
+		if (page.empty() || page == previous)
+			continue;
+		outcome.screen += page;
+		previous = page;
+	}
+	if (std::getenv("NES_ROM_HEX")) {
+		// The raw tiles of the first eight rows, for when the text and the picture
+		// disagree about what is on the screen.
+		for (int row = 0; row < 8; row++) {
+			char buf[8];
+			outcome.screen += "row ";
+			std::snprintf(buf, sizeof buf, "%2d:", row);
+			outcome.screen += buf;
+			for (int column = 0; column < 24; column++) {
+				std::snprintf(buf, sizeof buf, " %02X", console.ppu().vramRead(
+						static_cast<std::uint16_t>(0x2000 + row * 32 + column)));
+				outcome.screen += buf;
+			}
+			outcome.screen += "\n";
+		}
+	}
 	outcome.kind = judgeScreen(outcome.screen);
 	outcome.message = oneLine(outcome.screen);
 	return outcome;
@@ -387,10 +413,15 @@ const Known KNOWN_FAILURES[] = {
 	// emulator gets right by accident. The other four check the hardware's actual
 	// sprite evaluation -- which reads OAM in a particular order, at particular
 	// dots, and famously goes wrong in a way the real chip reproduces exactly.
-	{ "sprite_overflow_tests/1.Basics",  "sprite overflow is counted, not evaluated" },
 	{ "sprite_overflow_tests/2.Details", "sprite overflow ignores the evaluation order" },
 	{ "sprite_overflow_tests/3.Timing",  "sprite overflow is set at the wrong dot" },
-	{ "sprite_overflow_tests/4.Obscure", "the overflow bug's OAM misalignment" },
+	// Not a sprite problem at all, on the evidence. This one draws its verdict as
+	// "S PA SED" -- the S meant for column 4 lands at column 0 -- and the picture
+	// agrees with the nametable, so a $2007 write is going somewhere it should not.
+	// 1.Basics uses the same print routine and comes out clean, so whatever is
+	// wrong is timing-dependent, and the word being mangled may well be "PASSED".
+	// Chasing that is its own job; see ROADMAP.
+	{ "sprite_overflow_tests/4.Obscure", "a $2007 write lands 4 bytes early, mangling the verdict" },
 
 	// The older vblank suite, also newly visible. Its first five pass; these two
 	// are the same NMI-edge story as ppu_vbl_nmi's, from a different angle.
@@ -446,6 +477,8 @@ TEST_CASE("blargg_test_roms") {
 		const Outcome outcome = run(roms[i], &error);
 
 		INFO(label);
+		if (std::getenv("NES_ROM_SCREEN") && !outcome.screen.empty())
+			MESSAGE("screen of ", label, ":\n", outcome.screen);
 		if (!error.empty()) {
 			FAIL_CHECK("could not load: ", error);
 			failed++;
