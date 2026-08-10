@@ -489,7 +489,87 @@ ROM could only be opened from a command line.
    A read-only edit control rather than a message box, because thirty lines need to scroll
    and two columns need a fixed pitch to line up -- and because being able to select a line
    and copy it is a reasonable thing to want from a page listing what your keys do.
-5. **Dialogs and menus off Windows.** Both say so rather than opening nothing.
+5. ~~**A CRT scaling style.**~~ Done, and worth recording because the first version was
+   built, looked at, and rejected -- which is what a cosmetic feature is for.
+
+   The first attempt expanded every console pixel into a 3x3 cell carrying red, green and
+   blue in its columns and a dimmer last row. The arithmetic was right and the result was
+   wrong: it read as a grid of coloured squares rather than as a television, because a
+   television was never sharp. The beam was a spot with soft edges, the signal was
+   bandwidth-limited, and the phosphor spread whatever light it got.
+
+   So the mask stayed and the order changed. Stretch with a linear filter first, then
+   multiply the same mask over the stretched picture. It is faster -- the stretch is what a
+   renderer does anyway and the mask is one blended draw, where the expansion touched nine
+   pixels per console pixel per frame -- and it works at any window size instead of looking
+   right only at 3x. It also still needs no shader, which matters because `SDL_Renderer`
+   does not portably offer one.
+
+   The order made one thing clearer than the expansion ever did. The mask belongs to the
+   *screen*: the stripes were in the glass, at a pitch with nothing to do with what
+   resolution was being shown, so it is built in output pixels and rebuilt when the window
+   is resized. Scanlines belong to the *signal*: one per line the console drew, so their
+   spacing follows 240.
+
+   Three constants have reasons rather than history, and all three reasons are measurements
+   of screenshots:
+
+   - `CRT_LIFT` is a gamma curve and not a gain, because a gain clips. A mask can only
+     remove light and what it takes must be paid beforehand, but most NES colours already
+     have a channel at 255 where there is nowhere to pay: the linear gain took 42% of
+     Mario's sky and 16% of its red and green, and the sky turned lavender. A curve through
+     both ends has room everywhere between them.
+   - `CRT_STRIPE` is weak and `CRT_SCANLINE` is strong. Light removed evenly is a dimmer
+     television, which is correct; removed unevenly it is a different colour rather than a
+     darker one. A scanline dims all three channels together and so cannot shift a hue
+     however deep it goes, which is why it carries most of the effect.
+   - The beam profile is *integrated* over each output row rather than sampled once in it.
+     An 8:7 picture letterboxed into a 720-pixel window is 2.63 rows per line, so every line
+     meets the rows at a different phase; one sample per row put three seams at 98, 109 and
+     116 against a 135 line. On screen that is wide horizontal banding. Integrating has no
+     phase to be wrong about and closed form costs two cosines: the same measurement now
+     reads 3%.
+
+   A second look at it produced the other half of the feature. A television and a monitor
+   were *different glass*: a monitor, and a Trinitron, used an aperture grille with unbroken
+   stripes running the height of the tube, while most televisions used a slot mask, where
+   the colour columns run straight down just the same but each is broken into short slots
+   and the bridges between one column's slots sit half a slot from its neighbour's. A brick
+   wall stacked sideways. So there are two CRT entries rather than one, because neither is a
+   better version of the other.
+
+   Getting there took a wrong turn worth recording, because the wrong version was plausible
+   enough to build, test and screenshot. The first attempt staggered the *colours*
+   horizontally -- delta-gun triads on a hexagonal lattice, which some televisions did use.
+   That needs half of a three-pixel pitch, a pixel and a half, which no shift of an index
+   can express; the answer was to integrate the stripes across each output pixel the way the
+   beam is integrated across each row, which works exactly but leaves staggered columns at
+   half the stripe contrast, because a pixel straddling two stripes gets half of each.
+
+   A slot mask is both what was actually wanted and far less work. A slot's height is a
+   scanline's height -- the bridge is where the beam was already fading -- so the stagger
+   shifts the *beam* by half a line and needs no geometry at all. The beam integral takes a
+   position rather than an index, so it was already able to do this: the change deleted the
+   horizontal integration rather than adding anything.
+
+   Two things follow for free from it being a phase shift of a periodic profile. Shifting one
+   cannot change what a whole period integrates to, so a staggered column is exactly as
+   bright as an aligned one -- 112.4 against 112.5 average luma, measured on screen. And
+   alternating gaps break up the continuous dark rows a grille has, so the slot mask *bands
+   less* than the grille rather than more: 0.991 row-to-row uniformity against 0.968.
+
+   The mask is a plain function with a test beside it, so where the stripes fall, whether a
+   fractional scale bands, whether staggering costs light, and what the whole thing does to
+   brightness and to hue are all checked without a window. The hue test in particular exists
+   because a screenshot contradicted the design -- it is that measurement, written down.
+
+   One bug worth recording, because it was invisible in every screenshot: the light gun maps
+   window pixels to console pixels by undoing the renderer's scale, and only the X axis was
+   being corrected. Harmless while the logical height matched the picture, wrong the moment
+   the first CRT attempt made it three times taller. The rewrite moved it again -- there is
+   no logical size in CRT mode at all now, because the mask needs whole screen pixels -- so
+   it maps back through the same rectangle the picture was drawn into.
+6. **Dialogs and menus off Windows.** Both say so rather than opening nothing.
 
 ## Further out
 

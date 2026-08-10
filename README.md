@@ -40,7 +40,8 @@ that keeps the status bar fixed while the level moves beneath it all work.
 | Loadable plugins | `plugins/audio_sdl` is a real shared library; a module shadows the built-in of the same id |
 | Plugin chooser | `F1`, or `--settings` with no ROM: pick a plugin per job and the window size, saved to `nes.cfg` |
 | Rebinding | the controller plugin's own dialog: press Bind, then press the key or pad button |
-| Plugin settings | each plugin's own dialog — video's filter and pixel shape, audio's device, volume and buffer |
+| Plugin settings | each plugin's own dialog — video's scaling style and pixel shape, audio's device, volume and buffer |
+| CRT style | a soft stretch, then a mask multiplied over it — a television's slot mask or a monitor's grille |
 | Menu bar | native, on Windows: Emulation, State, Settings, Help — every item implemented |
 | Loading ROMs | from the menu or the command line; the window opens empty without one, and remembers the last eight |
 | Save states | eight slots beside the ROM, with the whole machine in them: RAM, both chips, the cartridge's registers, and where the beam is |
@@ -225,6 +226,76 @@ the handle the plugin already exports for dialogs. That is a deliberate exceptio
 plugin owning its window: the alternative was an ABI call obliging every video plugin
 ever written to host a menu. And the window grows by exactly the menu's height, so the
 picture keeps the size that was asked for instead of losing a strip to it.
+
+**Scaling** offers Sharp, Smooth, **CRT television** and **CRT monitor**. The CRT styles do
+two separate things in the order a television did them. First they stretch the picture with
+a linear filter, because nothing about a television was sharp — the beam was a spot with
+soft edges, the signal was bandwidth-limited, and the phosphor spread whatever light it got.
+Then they multiply a mask over the result:
+
+```
+[R  G  B ]
+[R  G  B ]
+[r  g  b ]   <- dimmer, where the beam was fading between lines
+```
+
+The order is the whole thing. Doing the mask first and stretching afterwards gives a grid
+of coloured squares; blurring first is what makes it read as a television. It also costs
+nothing — the stretch is what a renderer does anyway, and the mask is one blended draw, so
+no pixel is touched per frame and it works at any window size rather than only at 3x.
+
+Where the mask lives matters too. The stripes are a property of the *screen* — they were in
+the glass, at a pitch that had nothing to do with what resolution was being displayed — so
+the mask is built in output pixels. Scanlines are the other way round: they are in the
+*signal*, one per line the console drew, so their spacing follows 240 rather than the
+window.
+
+**A television and a monitor were different glass**, which is why both are offered rather
+than one being a "better CRT" setting. A monitor — and a Trinitron television — used an
+aperture grille: unbroken vertical stripes running the whole height of the tube. Most
+televisions used a *slot mask*, where the colour columns run straight down just the same
+but each is broken into short slots, and the bridges between one column's slots sit half a
+slot from its neighbour's:
+
+```
+R  G  B    r  g  b
+R  G  B    R  G  B
+r  g  b    r  g  b
+```
+
+A brick wall stacked sideways — the colours stay in step and the *gaps* alternate. It is
+much of why a television never looked like a monitor showing the same picture.
+
+That costs nothing to add, because a slot's height is a scanline's height: the bridge is
+where the beam was already fading, so the stagger shifts the beam by half a line and needs
+no geometry of its own. The beam integral takes a position rather than an index, so half a
+line is no harder to ask for than a whole one. And shifting a periodic profile cannot change
+what a whole period of it integrates to, so a staggered column is exactly as bright as an
+aligned one — measured on screen, the two masks come out at 112.4 and 112.5 average luma.
+
+It also *reduces* the horizontal banding rather than adding any: alternating gaps break up
+the continuous dark rows a grille has, measuring 0.991 row-to-row uniformity against the
+grille's 0.968.
+
+Three things about it came out of measuring screenshots rather than from taste, and each
+one changed the design:
+
+- **Brightness is paid with a curve, not a multiply.** A mask can only remove light, so
+  what it takes has to be paid in beforehand — but most NES colours already have a channel
+  at 255, where a multiply has nowhere to put it and clips. With a linear gain the mask took
+  42% of Mario's sky and only 16% of its red and green, and the sky turned lavender. A gamma
+  lift through (0,0) and (255,255) has room everywhere in between and cannot clip anything.
+- **The stripes are weak and the scanlines are strong.** Anything the mask takes evenly is
+  just a dimmer television, which is right; taking it unevenly is a different colour rather
+  than a darker one. A scanline dims all three channels together so it cannot shift a hue
+  however deep it goes, which is why it carries most of the effect.
+- **The beam is integrated over each row, not sampled once in it.** An 8:7 picture
+  letterboxed into a 720-pixel window is 2.63 rows per console line, so every line meets the
+  rows at a different phase. One sample per row put the seams at 98, 109 and 116 against a
+  135 line — wide horizontal bands that look like a fault rather than like a television.
+  Integrating has no phase to be wrong about, and the closed form costs two cosines.
+
+The picture ends up at about four fifths of its unfiltered brightness, with hues intact.
 
 Reset and Hard Reset are genuinely different. Reset is the button on the front — RAM
 survives it, and so do A, X and Y. Hard Reset is the switch at the back, and clears them.
