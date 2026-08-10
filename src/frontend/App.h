@@ -102,6 +102,27 @@ public:
 			std::function<bool(int, int, int*, int*)> toFrame);
 
 	/**
+	 * Ask for something from outside the input plugin.
+	 *
+	 * A menu is not a controller: it does not report a state every frame, it
+	 * produces one event when a person picks an item. So the bits are merged
+	 * into whatever the next frame polls, and the loop cannot tell the
+	 * difference between a menu item and the key that does the same thing --
+	 * which is the point, because there is then only one implementation of
+	 * each.
+	 */
+	void postCommand(unsigned commands) { m_posted |= commands; }
+
+	/**
+	 * Forget the wall-clock deadline.
+	 *
+	 * For anything that stops the emulator for an unknown length of time -- a
+	 * modal dialog, an open menu, a file picker. Without it the next frame is
+	 * measured against a moment long past and the pacer chases the difference.
+	 */
+	void dropDeadline() { m_deadlineValid = false; }
+
+	/**
 	 * Run one frame: poll input, act on it, step the console, present, pace.
 	 * @return false once the player has asked to quit.
 	 */
@@ -111,6 +132,7 @@ public:
 	void run();
 
 	bool paused() const { return m_paused; }
+	bool running() const { return m_running; }
 	bool muted() const { return m_muted; }
 	/** Frames per second as actually measured, or 0 before the first second. */
 	double measuredFps() const { return m_measuredFps; }
@@ -121,6 +143,7 @@ public:
 
 private:
 	void applyCommands(const InputState& state);
+	unsigned m_posted = 0;
 	void updateZapper();
 	void pumpAudio(bool generating);
 	void pace();

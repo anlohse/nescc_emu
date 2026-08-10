@@ -41,6 +41,7 @@ that keeps the status bar fixed while the level moves beneath it all work.
 | Plugin chooser | `F1`, or `--settings` with no ROM: pick a plugin per job and the window size, saved to `nes.cfg` |
 | Rebinding | the controller plugin's own dialog: press Bind, then press the key or pad button |
 | Plugin settings | each plugin's own dialog — video's filter and pixel shape, audio's device, volume and buffer |
+| Menu bar | native, on Windows: Emulation, State, Settings, Help — with what is not built yet listed and disabled |
 | Host services | plugins read the frame, the window handle and their own settings through `nes_host` |
 | Window | `nes_gui`: SDL2 video and audio, keyboard, paced to NTSC's 60.0988 Hz |
 | Headless runner | `nes_run`: tracing, scripted input, PPM screenshots, WAV capture |
@@ -193,6 +194,22 @@ Names are SDL's own — `Right Shift`, `Keypad 8`, `dpup`, `leftshoulder` — be
 converts both directions, so the names it writes are exactly the names it reads back.
 A binding it does not recognise is reported and skipped rather than rejecting the file:
 one typo costs that binding, not the rest of your setup.
+
+There is a menu bar now, on Windows, so none of the above has to be memorised: **Emulation**
+(reset, hard reset, pause, frame advance, mute, screenshot), **State**, **Settings** and
+**Help**. Items that are not built yet — loading a ROM, the save slots — are listed and
+disabled rather than hidden, because a gap somebody can see beats one they have to guess
+at, and that list is what gets worked down next.
+
+Two things about it are worth knowing. The window belongs to the *video plugin*, and the
+menu is host business, so the host attaches a menu to a window it did not create using
+the handle the plugin already exports for dialogs. That is a deliberate exception to the
+plugin owning its window: the alternative was an ABI call obliging every video plugin
+ever written to host a menu. And the window grows by exactly the menu's height, so the
+picture keeps the size that was asked for instead of losing a strip to it.
+
+Reset and Hard Reset are genuinely different. Reset is the button on the front — RAM
+survives it, and so do A, X and Y. Hard Reset is the switch at the back, and clears them.
 
 `F1` opens the chooser, which also sets the window size, and every plugin's Settings
 button opens that plugin's own dialog: the filter and pixel shape for video, the output

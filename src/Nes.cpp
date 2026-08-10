@@ -8,15 +8,8 @@ Nes::Nes() : m_regs(), m_cartridge(), m_ppu(nullptr), m_apu(),
 		m_bus(new NesBus(nullptr, &m_ppu, &m_apu)), m_clock(),
 		m_cpu(new Processor(m_bus.get(), &m_regs, &m_clock)),
 		m_region(Region::Ntsc) {
-	// The power-on state, which reset() deliberately does not reproduce. A
-	// stack pointer of 0 becomes the $FD everybody expects after the first
-	// reset decrements it three times, which is where that number comes from.
-	m_regs.a = 0;
-	m_regs.x = 0;
-	m_regs.y = 0;
-	m_regs.sp = 0;
-	m_regs.sr = FLAG__;
-	m_regs.pc = 0;
+	// The power-on state, which reset() deliberately does not reproduce.
+	powerOnRegisters();
 
 	// The 2A03 is a 6502 with the decimal circuitry disabled: ADC and SBC
 	// ignore the D flag entirely. Games set and clear D like any other bit and
@@ -26,6 +19,26 @@ Nes::Nes() : m_regs(), m_cartridge(), m_ppu(nullptr), m_apu(),
 
 	// The DMC fetches its samples over the CPU bus, like a second bus master.
 	m_apu.setBus(m_bus.get());
+}
+
+void Nes::powerOnRegisters() {
+	// A stack pointer of 0 becomes the $FD everybody expects once the reset
+	// that follows a power-on decrements it three times, which is where that
+	// number comes from.
+	m_regs.a = 0;
+	m_regs.x = 0;
+	m_regs.y = 0;
+	m_regs.sp = 0;
+	m_regs.sr = FLAG__;
+	m_regs.pc = 0;
+}
+
+void Nes::powerOn() {
+	// Everything a reset leaves alone, because this is the other switch: the
+	// RAM goes, and so do the registers.
+	m_bus->clearRam();
+	powerOnRegisters();
+	reset();
 }
 
 Nes::~Nes() = default;

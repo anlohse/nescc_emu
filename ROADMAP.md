@@ -391,6 +391,48 @@ Roughly in order of how likely a real game is to notice:
   and the core implements full BCD. No commercial game depends on this, which is why it
   is this far down.
 
+## The window itself
+
+Accuracy work reached a resting point at 48 of 93 with every remaining failure named, and
+what is left there needs the CPU's execution model rewritten for a payoff no commercial
+game demonstrably needs. Usability had a much larger gap: everything was a hotkey, and a
+ROM could only be opened from a command line.
+
+1. ~~**A menu bar.**~~ Done, natively, on Windows. Emulation, State, Settings and Help,
+   with **what is not implemented listed and disabled** rather than hidden -- a gap
+   somebody can see beats one they have to guess at, and the disabled entries are the
+   work list for this section.
+
+   Where to put it was a real question, because the window belongs to the video plugin
+   and the menu is host business: files, save slots, dialogs. The host attaches a native
+   menu to the handle the plugin already exports for parenting dialogs, which is a
+   deliberate exception to a plugin owning its window. The alternative was an ABI call
+   obliging every video plugin ever written to host a menu for the benefit of a host
+   feature, and there is exactly one video plugin.
+
+   Three details that had to be got right. The window grows by the menu's height, or the
+   picture silently loses a strip of itself. A menu command cannot arrive through SDL's
+   event queue, because the *input plugin* drains it and drops what it does not
+   recognise -- so a platform message hook is used, the one route into the process that
+   does not pass through somebody else's plugin. And an open menu runs the platform's own
+   message loop, which stops the emulator, so the frame deadline is dropped rather than
+   chased afterwards.
+
+   What is on it is `MenuModel`, tested with no window at all: what is offered with no
+   cartridge, which toggles carry a tick, that exactly one save slot is current, and --
+   in both directions -- that nothing enabled is unimplemented and nothing unimplemented
+   is enabled.
+
+   Hard Reset came out of the accuracy work rather than the GUI work. Now that reset
+   correctly preserves RAM, "power cycle" is a distinct operation and `Nes::powerOn()`
+   is it.
+2. **Loading a ROM from the menu**, which is the next item and a larger one than it
+   looks: the run loop has to tolerate having no cartridge, and accept one mid-run.
+   Recent ROMs follows immediately, and earns its keep from the same work.
+3. **Save states.** The State menu is already the specification: two actions, eight
+   slots showing when each was written, and a way to walk between them.
+4. **Dialogs and menus off Windows.** Both say so rather than opening nothing.
+
 ## Further out
 
 - **Save states.** The console's state is a handful of plain structs, so this is mostly

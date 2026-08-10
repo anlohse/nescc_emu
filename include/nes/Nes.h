@@ -75,6 +75,18 @@ public:
 	void reset();
 
 	/**
+	 * Pull the plug and put it back: the switch at the back, not the button on
+	 * the front.
+	 *
+	 * Clears the RAM, returns the registers to their power-on values and then
+	 * performs the reset that always follows one. A freshly constructed Nes is
+	 * already in this state, so this exists for the second time and afterwards
+	 * -- which is exactly what a "hard reset" in a menu means, and the only way
+	 * to get back a machine whose RAM a game has learned to recognise.
+	 */
+	void powerOn();
+
+	/**
 	 * Advance the system by one CPU instruction.
 	 *
 	 * Drains any OAM DMA stall first, then executes an instruction (or services
@@ -114,6 +126,7 @@ public:
 	double frameRate() const { return m_region == Region::Pal ? 50.0070 : 60.0988; }
 
 private:
+	void powerOnRegisters();
 	Registers m_regs;
 	std::unique_ptr<Cartridge> m_cartridge;
 	Ppu m_ppu;
