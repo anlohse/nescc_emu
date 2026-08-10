@@ -180,8 +180,14 @@ if(NES_BUILD_TESTS)
     #
     #   nestest.nes  by Kevin Horton -- https://www.nesdev.org/wiki/Emulator_tests
     #   nestest.log  the reference trace published alongside it
+    #
+    # nes_rom_test below looks in <dir>/blargg for blargg's suites, in any
+    # arrangement of subdirectories. They are published for exactly this
+    # purpose and are collected at https://github.com/christopherpow/nes-test-roms
+    # -- ppu_vbl_nmi, apu_test, mmc3_test and instr_test-v5 are the ones that
+    # earn their keep first.
     set(NES_TEST_ROM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/roms" CACHE PATH
-        "Directory holding nestest.nes and nestest.log")
+        "Directory holding nestest.nes, nestest.log and a blargg/ subdirectory")
 
     if(EXISTS "${NES_TEST_ROM_DIR}/nestest.nes")
         target_compile_definitions(nes_test PRIVATE
@@ -194,6 +200,23 @@ if(NES_BUILD_TESTS)
     endif()
 
     add_test(NAME nes_test COMMAND nes_test)
+
+    # Kept out of nes_test because it is a different kind of test: minutes of
+    # emulated console time rather than milliseconds, and it depends on ROMs
+    # that are not in this repository. The fast suite has to stay fast enough
+    # to run on every save.
+    add_executable(nes_rom_test test_src/testBlargg.cpp)
+    target_link_libraries(nes_rom_test PRIVATE nes_lib doctest::doctest)
+    if(IS_DIRECTORY "${NES_TEST_ROM_DIR}/blargg")
+        message(STATUS "test ROMs found in ${NES_TEST_ROM_DIR}/blargg")
+    else()
+        message(STATUS
+            "no test ROMs in ${NES_TEST_ROM_DIR}/blargg; nes_rom_test will skip. "
+            "See the comment in nes/CMakeLists.txt for where to get them.")
+    endif()
+    target_compile_definitions(nes_rom_test PRIVATE
+        NES_TEST_ROM_DIR="${NES_TEST_ROM_DIR}")
+    add_test(NAME nes_rom_test COMMAND nes_rom_test)
 endif()
 
 # ------------------------------------------------------------------------------

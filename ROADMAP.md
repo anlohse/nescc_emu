@@ -223,11 +223,33 @@ knowing before reading the header:
 
 Roughly in order of how likely a real game is to notice:
 
-- **Test ROMs as gates.** nestest for the CPU, blargg's APU and MMC3 suites for the
-  rest. These would settle how much the known approximations actually cost, rather than
-  leaving it to guesswork. The APU suite has a specific job waiting for it: the frame
-  interrupt currently powers up inhibited, which is a deviation adopted because a real
-  game needs it, and only a test ROM can say what the hardware truly does.
+- ~~**Test ROMs as gates.**~~ Done, and worth every minute. `nes_rom_test` runs 93 of
+  blargg's ROMs through the `$6000` status protocol — a result read rather than looked
+  at — in its own target, because it takes minutes where the unit suite takes
+  milliseconds. **38 pass, 30 fail for reasons now written down, 25 are older ROMs that
+  only draw their answer on screen.** Every failure is listed in `testBlargg.cpp` with
+  its cause, so a *new* failure is a regression and a fixed one tells you to delete its
+  entry.
+
+  Two things fell out of the first run, both invisible to every test written here:
+
+  **Reset was clearing the machine.** `Nes::reset()` wiped the 2 KB of RAM and zeroed
+  A, X and Y. Hardware does neither: reset decrements the stack pointer three times,
+  sets `I`, and jumps through the vector. A game can tell a warm boot from a cold one by
+  what survived, and pressing `R` in the emulator was destroying it. Found because
+  `ram_after_reset` did not fail — it *hung*, restarting forever on a machine that kept
+  forgetting.
+
+  **The 2A03 has no decimal mode**, which was the last bullet in this section on the
+  grounds that no commercial game depends on it. It was the single largest cluster of
+  failures: seven of `instr_test-v5`'s sixteen ROMs, every failing opcode an `ADC`,
+  `SBC`, `RRA` or `ISC`. Fixed in the core as a switch, and the switch is phrased as a
+  *disable* so that the `memset` several places use to reset a register file cannot
+  silently flip it — the first version did exactly that and broke Klaus Dormann's
+  decimal tests.
+
+  The largest clusters left are the MMC3's A12 clocking (6 ROMs), the dots around the
+  vblank edge (7), and interrupt latency inside the CPU core (5).
 - ~~**Bus conflicts** on UxROM and CNROM~~ — done, driven by the NES 2.0 submapper
   rather than guessed from the mapper number.
 - ~~**MMC1's consecutive-write rule.**~~ Done, and it needed fixing in the CPU first: a

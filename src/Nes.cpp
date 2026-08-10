@@ -8,7 +8,22 @@ Nes::Nes() : m_regs(), m_cartridge(), m_ppu(nullptr), m_apu(),
 		m_bus(new NesBus(nullptr, &m_ppu, &m_apu)), m_clock(),
 		m_cpu(new Processor(m_bus.get(), &m_regs, &m_clock)),
 		m_region(Region::Ntsc) {
-	std::memset(&m_regs, 0, sizeof(m_regs));
+	// The power-on state, which reset() deliberately does not reproduce. A
+	// stack pointer of 0 becomes the $FD everybody expects after the first
+	// reset decrements it three times, which is where that number comes from.
+	m_regs.a = 0;
+	m_regs.x = 0;
+	m_regs.y = 0;
+	m_regs.sp = 0;
+	m_regs.sr = FLAG__;
+	m_regs.pc = 0;
+
+	// The 2A03 is a 6502 with the decimal circuitry disabled: ADC and SBC
+	// ignore the D flag entirely. Games set and clear D like any other bit and
+	// a few leave it set, so a core doing real BCD gets different answers --
+	// which is what blargg's instr_test found across seven of its ROMs.
+	m_regs.decimalDisabled = true;
+
 	// The DMC fetches its samples over the CPU bus, like a second bus master.
 	m_apu.setBus(m_bus.get());
 }
@@ -54,12 +69,15 @@ void Nes::setCartridge(std::unique_ptr<Cartridge> cartridge) {
 }
 
 void Nes::reset() {
-	m_bus->clearRam();
+	// Neither the RAM nor A, X and Y are touched. Reset asserts a pin; it does
+	// not clear the machine, and a game is entitled to notice what survived.
+	// The stack pointer moves because the reset sequence goes through the
+	// motions of pushing a return address and the status register without ever
+	// writing them -- three decrements, no writes.
 	m_ppu.reset();
 	m_apu.reset();
-	std::memset(&m_regs, 0, sizeof(m_regs));
-	m_regs.sp = 0xFD;
-	m_regs.sr = FLAG__ | FLAG_I;
+	m_regs.sp -= 3;
+	m_regs.sr |= FLAG_I;
 	m_regs.pc = m_bus->read(0xFFFC) | (m_bus->read(0xFFFD) << 8);
 	m_cpu->clearInterrupts();
 	m_bus->setRegion(m_region);   // also clears the carried dot fraction

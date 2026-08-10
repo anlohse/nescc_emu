@@ -322,6 +322,30 @@ ctest --test-dir build -C Release --output-on-failure
 The cartridge and bus tests build synthetic iNES images in-memory, so they need no
 external ROMs.
 
+### Test ROMs
+
+`nes_rom_test` runs blargg's suites — the ones written by people with the hardware in
+front of them, which is the only kind of test that disagrees with an emulator for
+reasons its author did not think of. They report through memory rather than the screen
+(`$6000` holds a status byte, `$6004` a message), so the result is read rather than
+looked at. Drop them into `roms/blargg/`, in any arrangement of subdirectories; without
+them the test reports itself as skipped. They are not redistributed here, and
+`roms/` is gitignored.
+
+It is a separate target because it takes minutes where the unit suite takes
+milliseconds. **38 of 93 pass**; 30 fail for reasons listed one by one in
+`test_src/testBlargg.cpp`, and 25 are older ROMs that only draw their answer on screen.
+Listing each known failure with its cause is what keeps the gate readable: a failure
+that is *not* on the list is a regression, and one that starts passing asks you to
+delete its entry.
+
+Two of them are worth naming, because nothing written here could have caught either:
+reset was clearing RAM and the registers, which hardware does not do, and the 2A03's
+missing decimal mode accounted for seven failures on its own.
+
+Set `NES_ROM_FILTER` to run one ROM, and `NES_ROM_TRACE` to watch its status byte
+change — which is the only thing a ROM that hangs will tell you.
+
 ### nestest
 
 The CPU conformance test needs `nestest.nes` and its reference log, which are **not**
