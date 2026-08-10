@@ -10,6 +10,7 @@
 #include "GuiConfig.h"
 #include "frontend/App.h"
 #include "frontend/HostServices.h"
+#include "frontend/MenuBar.h"
 #include "frontend/SdlBackend.h"
 #include "frontend/PluginSettings.h"
 #include "frontend/SdlPlugin.h"
@@ -346,7 +347,117 @@ int main(int argc, char* argv[]) {
 				return video.windowToFrame(wx, wy, fx, fy);
 			});
 
-	app.run();
+	/* --- The menu bar ---------------------------------------------------- */
+
+	// Open the dialog belonging to whichever plugin is doing a given job. The
+	// throwaway instance and the reasoning behind it live in PluginSettings;
+	// this is only the entry point the menu needs.
+	auto configureKind = [&](int kind) {
+		nesfe::PluginSettings settings(registry, config, host.handle());
+		app.dropDeadline();          // a modal dialog stops the emulator
+		settings.configure(kind);
+		app.dropDeadline();
+	};
+
+	auto menuState = [&]() {
+		nesfe::MenuState state;
+		state.romLoaded = console.hasCartridge();
+		state.paused = app.paused();
+		state.muted = app.muted();
+		state.videoConfigurable = nesplug::hasConfigureDialog(*videoEntry);
+		state.audioConfigurable = audioEntry
+				&& nesplug::hasConfigureDialog(*audioEntry);
+		state.inputConfigurable = nesplug::hasConfigureDialog(*inputEntry);
+		return state;
+	};
+
+	// Attached to a window this program did not create. The menu is host
+	// business -- files, save slots, dialogs -- and obliging every video plugin
+	// ever written to host one would be a poor trade for it. A plugin that
+	// exports no handle simply gets no menu.
+	bool menuOn = nesfe::menuBarAvailable()
+			&& nesfe::setMenuBar(video.nativeWindow(),
+					nesfe::buildMenu(menuState()), true);
+	if (nesfe::menuBarAvailable() && !menuOn)
+		SDL_Log("no window handle for a menu; hotkeys still work");
+
+#if defined(_WIN32)
+	// The input plugin drains SDL's event queue and drops what it does not
+	// recognise, so a menu command cannot arrive that way. A message hook is
+	// the one route into this process that does not run through somebody else's
+	// plugin.
+	SDL_SetWindowsMessageHook([](void*, void*, unsigned int message,
+			Uint64 wParam, Sint64 lParam) {
+		nesfe::handleMenuCommand(message, wParam, lParam);
+	}, nullptr);
+#endif
+
+	bool wasPaused = app.paused();
+	bool wasMuted = app.muted();
+
+	while (app.runFrame()) {
+		const int action = nesfe::takeMenuAction();
+		switch (action) {
+		case nesfe::MENU_NONE:
+			break;
+		case nesfe::MENU_RESET:
+			app.postCommand(nesfe::COMMAND_RESET);
+			break;
+		case nesfe::MENU_HARD_RESET:
+			app.postCommand(nesfe::COMMAND_HARD_RESET);
+			break;
+		case nesfe::MENU_PAUSE:
+			app.postCommand(nesfe::COMMAND_PAUSE);
+			break;
+		case nesfe::MENU_FRAME_ADVANCE:
+			app.postCommand(nesfe::COMMAND_STEP_FRAME);
+			break;
+		case nesfe::MENU_MUTE:
+			app.postCommand(nesfe::COMMAND_MUTE);
+			break;
+		case nesfe::MENU_SCREENSHOT:
+			app.postCommand(nesfe::COMMAND_SCREENSHOT);
+			break;
+		case nesfe::MENU_EXIT:
+			app.postCommand(nesfe::COMMAND_QUIT);
+			break;
+		case nesfe::MENU_CONFIGURE_VIDEO:
+			configureKind(0);
+			break;
+		case nesfe::MENU_CONFIGURE_AUDIO:
+			configureKind(1);
+			break;
+		case nesfe::MENU_CONFIGURE_INPUT:
+			configureKind(2);
+			break;
+		case nesfe::MENU_CONFIGURE_PLUGINS:
+			app.postCommand(nesfe::COMMAND_SETTINGS);
+			break;
+		case nesfe::MENU_ABOUT:
+			app.dropDeadline();
+			nesfe::showAboutBox(video.nativeWindow(),
+					"nes -- a NES emulator in C++17, on the emu6502 core.\n\n"
+					"Video is built in; audio and controllers are plugins.\n"
+					"Press F1 for the plugin chooser.");
+			app.dropDeadline();
+			break;
+		default:
+			// A slot, a recent ROM, or something listed but not built yet. The
+			// menu already shows those disabled, so arriving here means a new
+			// item was added without a case, which is worth hearing about.
+			SDL_Log("menu action %d is not wired up yet", action);
+			break;
+		}
+
+		// The ticks beside Pause and Mute have to follow the state, and the
+		// state can change from a key as easily as from the menu.
+		if (menuOn && (app.paused() != wasPaused || app.muted() != wasMuted)) {
+			wasPaused = app.paused();
+			wasMuted = app.muted();
+			nesfe::setMenuBar(video.nativeWindow(), nesfe::buildMenu(menuState()),
+					false);
+		}
+	}
 
 	// Before tearing anything down: closing the window must not cost a save.
 	std::string saveError;

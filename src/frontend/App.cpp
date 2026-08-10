@@ -73,6 +73,16 @@ void App::applyCommands(const InputState& state) {
 		m_muted = !m_muted;
 		m_audio.clear();
 	}
+	if (state.commands & COMMAND_HARD_RESET) {
+		// The switch at the back. Save first for the same reason a reset does:
+		// the game is about to lose its work RAM either way.
+		m_console.saveBatteryRam();
+		m_console.powerOn();
+		m_audio.clear();
+		m_resampler.reset();
+		if (m_audio.isOpen())
+			m_console.apu().setSampleOutput(true);
+	}
 	if (state.commands & COMMAND_RESET) {
 		// Save before resetting: the game is about to lose whatever was in its
 		// work RAM, and a player pressing reset does not expect that to cost
@@ -178,6 +188,10 @@ void App::pace() {
 bool App::runFrame() {
 	InputState state;
 	m_input.poll(&state);
+	// Whatever a menu asked for since the last frame arrives here, indistinct
+	// from the key that means the same thing.
+	state.commands |= m_posted;
+	m_posted = 0;
 	applyCommands(state);
 	if (!m_running)
 		return false;

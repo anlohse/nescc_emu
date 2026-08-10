@@ -122,7 +122,18 @@ enum Command {
 	COMMAND_MUTE       = NES_COMMAND_MUTE,           // toggle
 	COMMAND_RESET      = NES_COMMAND_RESET,
 	COMMAND_SCREENSHOT = NES_COMMAND_SCREENSHOT,
-	COMMAND_SETTINGS   = NES_COMMAND_SETTINGS
+	COMMAND_SETTINGS   = NES_COMMAND_SETTINGS,
+
+	/*
+	 * Host-only, well past the bits the ABI defines.
+	 *
+	 * A menu can ask for things no plugin has any business asking for, and the
+	 * ABI's command bitmask is not the place to put them: adding one there
+	 * would oblige every plugin author to read about a feature they cannot use.
+	 * Starting at 1 << 16 leaves the ABI room to grow into the low bits without
+	 * ever colliding.
+	 */
+	COMMAND_HARD_RESET = 1u << 16
 };
 
 /**
