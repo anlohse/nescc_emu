@@ -2,6 +2,7 @@
 #define NES_MAPPER_H
 
 #include <cstdint>
+#include "State.h"
 #include <iosfwd>
 #include <vector>
 
@@ -83,6 +84,18 @@ public:
 	virtual void ppuA12Rise() { }
 
 	/**
+	 * Save or restore whatever this board remembers.
+	 *
+	 * The base does the parts every board has -- its work RAM, its CHR when
+	 * that is RAM rather than ROM, and the mirroring it may have been told to
+	 * change. A board with registers of its own overrides this, calls the base
+	 * first, and adds them. What is deliberately *not* here is the PRG and CHR
+	 * ROM: those come from the file, and a state that carried them would be a
+	 * copy of the cartridge.
+	 */
+	virtual void serialize(State& state) { (void)state; }
+
+	/**
 	 * True while the board is holding the CPU's IRQ line down.
 	 *
 	 * Level-triggered, like the APU's: it stays asserted until the game
@@ -142,6 +155,17 @@ public:
 
 	/** True when the board has no CHR ROM and the PPU is writing to RAM. */
 	bool hasChrRam() const { return m_chrIsRam; }
+
+	/**
+	 * Save or restore what every banked board has in common.
+	 *
+	 * Its work RAM, its CHR when that is RAM rather than ROM, and the mirroring
+	 * it may have been told to change. A board with registers of its own
+	 * overrides this, calls it first, and adds them. Deliberately absent: the
+	 * PRG and CHR ROM, which come from the file -- a state carrying those would
+	 * be a copy of the cartridge.
+	 */
+	void serialize(State& state) override;
 
 	std::vector<std::uint8_t>* workRam() override { return &m_prgRam; }
 	const std::vector<std::uint8_t>* workRam() const override { return &m_prgRam; }
@@ -208,6 +232,7 @@ private:
  */
 class UxRomMapper : public BankedMapper {
 public:
+	void serialize(State& state) override;
 	UxRomMapper(std::vector<std::uint8_t> prg, std::vector<std::uint8_t> chr,
 			Mirroring mirroring, bool fourScreen = false);
 
@@ -230,6 +255,7 @@ private:
  */
 class CnRomMapper : public BankedMapper {
 public:
+	void serialize(State& state) override;
 	CnRomMapper(std::vector<std::uint8_t> prg, std::vector<std::uint8_t> chr,
 			Mirroring mirroring, bool fourScreen = false);
 
@@ -255,6 +281,7 @@ private:
  */
 class AxRomMapper : public BankedMapper {
 public:
+	void serialize(State& state) override;
 	AxRomMapper(std::vector<std::uint8_t> prg, std::vector<std::uint8_t> chr,
 			Mirroring mirroring, bool fourScreen = false);
 
@@ -283,6 +310,7 @@ private:
  */
 class Mapper87 : public BankedMapper {
 public:
+	void serialize(State& state) override;
 	Mapper87(std::vector<std::uint8_t> prg, std::vector<std::uint8_t> chr,
 			Mirroring mirroring, bool fourScreen = false);
 
@@ -316,6 +344,7 @@ private:
  */
 class Mmc1Mapper : public BankedMapper {
 public:
+	void serialize(State& state) override;
 	Mmc1Mapper(std::vector<std::uint8_t> prg, std::vector<std::uint8_t> chr,
 			Mirroring mirroring, bool fourScreen = false);
 
@@ -362,6 +391,7 @@ private:
  */
 class Mmc3Mapper : public BankedMapper {
 public:
+	void serialize(State& state) override;
 	Mmc3Mapper(std::vector<std::uint8_t> prg, std::vector<std::uint8_t> chr,
 			Mirroring mirroring, bool fourScreen = false);
 

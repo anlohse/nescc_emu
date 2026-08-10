@@ -103,6 +103,41 @@ public:
 	/** Run until the PPU completes a frame. @return CPU cycles consumed. */
 	int stepFrame();
 
+	/**
+	 * Write the whole machine to @p path.
+	 *
+	 * Everything a running console holds: RAM, both chips' registers and
+	 * counters, the cartridge's own registers and work RAM, where the beam is,
+	 * and what the CPU was about to do. Not the ROM -- a state is not a copy of
+	 * the cartridge -- so it records enough about the ROM to refuse being
+	 * loaded into a different game.
+	 *
+	 * @return false with a reason in @p error, which is a file that could not
+	 *         be written or a machine with no cartridge in it.
+	 */
+	bool saveState(const std::string& path, std::string* error = nullptr);
+
+	/**
+	 * Restore a state written by saveState().
+	 *
+	 * Refuses a file from a different build, a different game, or one that has
+	 * been truncated, and says which -- and leaves the machine untouched when
+	 * it refuses, because a half-loaded console is worse than a rejected file.
+	 */
+	bool loadState(const std::string& path, std::string* error = nullptr);
+
+	/** Save or restore in memory, for a caller with its own storage. */
+	void serialize(State& state);
+
+	/**
+	 * What identifies the loaded cartridge in a save state.
+	 *
+	 * A cheap checksum over the PRG plus its size and mapper number. Enough to
+	 * catch loading Zelda's state into Mario, which is the mistake worth
+	 * catching; not a cryptographic claim about anything.
+	 */
+	std::uint64_t romFingerprint() const;
+
 	Registers& cpuRegisters() { return m_regs; }
 	const Registers& cpuRegisters() const { return m_regs; }
 	Processor& cpu() { return *m_cpu; }

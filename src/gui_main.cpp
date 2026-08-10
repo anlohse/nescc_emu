@@ -11,6 +11,7 @@
 #include "frontend/App.h"
 #include "frontend/HostServices.h"
 #include "frontend/FileDialog.h"
+#include "frontend/KeysReference.h"
 #include "frontend/MenuBar.h"
 #include "frontend/SdlBackend.h"
 #include "frontend/PluginSettings.h"
@@ -399,6 +400,26 @@ int main(int argc, char* argv[]) {
 		return true;
 	};
 
+	/*
+	 * Where a slot lives: beside the ROM, named after it.
+	 *
+	 * The same reasoning as the .sav file. A state belongs to one game, and
+	 * keeping it next to that game means moving the folder moves the states with
+	 * it -- which is what somebody who organises their ROMs expects.
+	 */
+	int saveSlot = 0;
+	auto slotPath = [&](int slot) {
+		std::string path = config.recentRoms.empty() ? std::string()
+				: config.recentRoms.front();
+		if (path.empty())
+			return std::string();
+		const std::size_t dot = path.find_last_of('.');
+		const std::size_t cut = path.find_last_of("/\\");
+		if (dot != std::string::npos && (cut == std::string::npos || dot > cut))
+			path.erase(dot);
+		return path + ".st" + std::to_string(slot + 1);
+	};
+
 	auto closeRom = [&]() {
 		console.saveBatteryRam();
 		console.setCartridge(nullptr);
@@ -409,6 +430,12 @@ int main(int argc, char* argv[]) {
 		nesfe::MenuState state;
 		state.romLoaded = console.hasCartridge();
 		state.canPickFile = nesfe::fileDialogAvailable();
+		state.saveSlot = saveSlot;
+		// A slot shows when it was written, taken from the file itself rather
+		// than from anything this program remembers -- so a state written by an
+		// earlier run, or deleted behind our back, is described correctly.
+		for (int i = 0; i < nesfe::MENU_SLOT_COUNT; i++)
+			state.slotLabels.push_back(nesfe::fileWrittenAt(slotPath(i)));
 		for (std::size_t i = 0; i < config.recentRoms.size(); i++)
 			state.recentRoms.push_back(displayName(config.recentRoms[i]));
 		state.paused = app.paused();
@@ -499,6 +526,40 @@ int main(int argc, char* argv[]) {
 			closeRom();
 			refreshMenu = true;
 			break;
+		case nesfe::MENU_SAVE_STATE: {
+			std::string why;
+			if (!console.saveState(slotPath(saveSlot), &why))
+				SDL_Log("save state: %s", why.c_str());
+			else
+				SDL_Log("saved slot %d", saveSlot + 1);
+			// The slot's timestamp is part of the menu, so it has to be rebuilt.
+			refreshMenu = true;
+			break;
+		}
+		case nesfe::MENU_LOAD_STATE: {
+			std::string why;
+			if (!console.loadState(slotPath(saveSlot), &why)) {
+				// Worth a box rather than only the log: this is a thing somebody
+				// asked for and did not get, and the reason matters -- a state
+				// for another game reads very differently from a missing one.
+				app.dropDeadline();
+				SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, "nes",
+						why.c_str(), nullptr);
+				app.dropDeadline();
+			} else {
+				SDL_Log("loaded slot %d", saveSlot + 1);
+			}
+			break;
+		}
+		case nesfe::MENU_NEXT_SLOT:
+			saveSlot = (saveSlot + 1) % nesfe::MENU_SLOT_COUNT;
+			refreshMenu = true;
+			break;
+		case nesfe::MENU_PREV_SLOT:
+			saveSlot = (saveSlot + nesfe::MENU_SLOT_COUNT - 1)
+					% nesfe::MENU_SLOT_COUNT;
+			refreshMenu = true;
+			break;
 		case nesfe::MENU_RESET:
 			app.postCommand(nesfe::COMMAND_RESET);
 			break;
@@ -532,6 +593,14 @@ int main(int argc, char* argv[]) {
 		case nesfe::MENU_CONFIGURE_PLUGINS:
 			app.postCommand(nesfe::COMMAND_SETTINGS);
 			break;
+		case nesfe::MENU_HOTKEYS:
+			// Built from the configuration each time it is opened, so a binding
+			// changed a minute ago is what it describes.
+			app.dropDeadline();
+			nesfe::showTextBox(video.nativeWindow(), "Keys and Buttons",
+					nesfe::keysReferenceText(config));
+			app.dropDeadline();
+			break;
 		case nesfe::MENU_ABOUT:
 			app.dropDeadline();
 			nesfe::showAboutBox(video.nativeWindow(),
@@ -540,14 +609,21 @@ int main(int argc, char* argv[]) {
 					"Press F1 for the plugin chooser.");
 			app.dropDeadline();
 			break;
-		default:
-			// A save slot, or something listed but not built yet. Recent ROMs
-			// were handled above. The menu already shows those disabled, so
+		default: {
+			const int slot = nesfe::slotForAction(action);
+			if (slot >= 0) {
+				saveSlot = slot;
+				refreshMenu = true;
+				break;
+			}
+			// Something listed but not built yet. Recent ROMs were handled
+			// above. The menu already shows those disabled, so
 			// arriving here means a new item was added without a case, which is
 			// worth hearing about.
 			if (recent < 0)
 				SDL_Log("menu action %d is not wired up yet", action);
 			break;
+		}
 		}
 
 		// The ticks beside Pause and Mute have to follow the state, and the

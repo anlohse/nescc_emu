@@ -2,6 +2,7 @@
 #define NES_PPU_H
 
 #include "Cartridge.h"
+#include "State.h"
 
 #include <array>
 #include <cstdint>
@@ -148,6 +149,9 @@ public:
 
 	/** 64 entries of packed 0x00RRGGBB for the NES's fixed colour palette. */
 	static const std::uint32_t* nesPaletteRgb();
+
+	/** Save or restore. @see nes/State.h */
+	void serialize(State& state);
 
 private:
 	void tickOne();

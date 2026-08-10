@@ -26,6 +26,8 @@
 
 #include "MenuModel.h"
 
+#include <string>
+
 namespace nesfe {
 
 /** Whether this build can put a menu on a window at all. */
@@ -67,6 +69,14 @@ bool handleMenuCommand(unsigned message, unsigned long long wParam,
 
 /** Put up the About box. Here because it is the same platform problem. */
 void showAboutBox(void* parent, const char* text);
+
+/**
+ * Show a page of read-only text, scrollable, with nothing to fill in.
+ *
+ * A message box would do for three lines and not for thirty: it cannot scroll,
+ * and it centres what it shows, which ruins two columns meant to line up.
+ */
+void showTextBox(void* parent, const char* title, const std::string& text);
 
 } // namespace nesfe
 

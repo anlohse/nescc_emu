@@ -84,8 +84,15 @@ std::vector<MenuSection> buildMenu(const MenuState& state) {
 	{
 		MenuSection s;
 		s.label = "&State";
-		s.items.push_back(todo(MENU_SAVE_STATE, "&Save State", "F5"));
-		s.items.push_back(todo(MENU_LOAD_STATE, "&Load State", "F8"));
+		// Saving needs a cartridge; loading needs one *and* a state in the
+		// current slot, which is what the timestamp beside it tells you.
+		const bool slotWritten = state.saveSlot
+						< static_cast<int>(state.slotLabels.size())
+				&& !state.slotLabels[state.saveSlot].empty();
+		s.items.push_back(entry(MENU_SAVE_STATE, "&Save State", "F5",
+				state.romLoaded));
+		s.items.push_back(entry(MENU_LOAD_STATE, "&Load State", "F8",
+				state.romLoaded && slotWritten));
 		s.items.push_back(separator());
 
 		// The slots are listed even though nothing writes them yet: the shape of
@@ -97,15 +104,15 @@ std::vector<MenuSection> buildMenu(const MenuState& state) {
 					? state.slotLabels[i] : std::string();
 			std::snprintf(label, sizeof(label), "Slot &%d  %s", i + 1,
 					when.empty() ? "(empty)" : when.c_str());
-			MenuItem item = todo(slotAction(i), label);
+			MenuItem item = entry(slotAction(i), label, "", state.romLoaded);
 			item.radio = true;
 			item.checked = (i == state.saveSlot);
 			s.items.push_back(item);
 		}
 
 		s.items.push_back(separator());
-		s.items.push_back(todo(MENU_NEXT_SLOT, "&Next Slot", "Ctrl+Right"));
-		s.items.push_back(todo(MENU_PREV_SLOT, "&Previous Slot", "Ctrl+Left"));
+		s.items.push_back(entry(MENU_NEXT_SLOT, "&Next Slot", "Ctrl+Right"));
+		s.items.push_back(entry(MENU_PREV_SLOT, "&Previous Slot", "Ctrl+Left"));
 		bar.push_back(s);
 	}
 
@@ -131,7 +138,7 @@ std::vector<MenuSection> buildMenu(const MenuState& state) {
 	{
 		MenuSection s;
 		s.label = "&Help";
-		s.items.push_back(todo(MENU_HOTKEYS, "&Keys and Buttons"));
+		s.items.push_back(entry(MENU_HOTKEYS, "&Keys and Buttons"));
 		s.items.push_back(separator());
 		s.items.push_back(entry(MENU_ABOUT, "&About"));
 		bar.push_back(s);

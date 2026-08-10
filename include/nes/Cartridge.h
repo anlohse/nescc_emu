@@ -49,6 +49,8 @@ public:
 
 	/** Tell the board a scanline's pattern fetches happened. Drives MMC3's IRQ. */
 	void ppuA12Rise() { m_mapper->ppuA12Rise(); }
+	/** Save or restore the board's own state. The ROM itself is not included. */
+	void serialize(State& state) { m_mapper->serialize(state); }
 	/** True while the board is holding the CPU's IRQ line down. */
 	bool irqAsserted() const { return m_mapper->irqAsserted(); }
 

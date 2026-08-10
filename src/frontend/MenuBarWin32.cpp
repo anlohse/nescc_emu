@@ -62,6 +62,34 @@ HMENU buildSection(const MenuSection& section) {
 	return menu;
 }
 
+/** Closes on the button, on Escape, and on the frame's close box. */
+LRESULT CALLBACK textPageProc(HWND window, UINT message, WPARAM wParam,
+		LPARAM lParam) {
+	switch (message) {
+	case WM_COMMAND:
+		// The only control that reports anything here is the Close button.
+		DestroyWindow(window);
+		return 0;
+	case WM_CLOSE:
+		DestroyWindow(window);
+		return 0;
+	case WM_DESTROY:
+		PostQuitMessage(0);
+		return 0;
+	default:
+		break;
+	}
+	return DefWindowProc(window, message, wParam, lParam);
+}
+
+HFONT uiFont() {
+	NONCLIENTMETRICSA metrics;
+	metrics.cbSize = sizeof(metrics);
+	if (SystemParametersInfoA(SPI_GETNONCLIENTMETRICS, sizeof(metrics), &metrics, 0))
+		return CreateFontIndirectA(&metrics.lfMessageFont);
+	return static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+}
+
 } // namespace
 
 bool menuBarAvailable() {
@@ -130,6 +158,100 @@ bool handleMenuCommand(unsigned message, unsigned long long wParam,
 void showAboutBox(void* parent, const char* text) {
 	MessageBoxA(static_cast<HWND>(parent), text, "About nes",
 			MB_OK | MB_ICONINFORMATION);
+}
+
+void showTextBox(void* parent, const char* title, const std::string& text) {
+	HWND owner = static_cast<HWND>(parent);
+
+	// An edit control rather than a static: it scrolls, it selects, and a person
+	// can copy a line out of it, which is a reasonable thing to want from a page
+	// listing what their keys do.
+	//
+	// Windows wants CRLF in a multi-line edit; a lone newline shows as a box.
+	std::string crlf;
+	crlf.reserve(text.size() + text.size() / 16);
+	for (std::size_t i = 0; i < text.size(); i++) {
+		if (text[i] == '\n')
+			crlf += '\r';
+		crlf += text[i];
+	}
+
+	HINSTANCE instance = GetModuleHandleA(nullptr);
+	static bool registered = false;
+	const char* className = "nesTextPage";
+	if (!registered) {
+		WNDCLASSA cls;
+		ZeroMemory(&cls, sizeof(cls));
+		cls.lpfnWndProc = textPageProc;
+		cls.hInstance = instance;
+		cls.hCursor = LoadCursor(nullptr, IDC_ARROW);
+		cls.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
+		cls.lpszClassName = className;
+		if (!RegisterClassA(&cls) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
+			return;
+		registered = true;
+	}
+
+	const int width = 460;
+	const int height = 520;
+	const DWORD style = WS_POPUPWINDOW | WS_CAPTION;
+	RECT frame = { 0, 0, width, height };
+	AdjustWindowRectEx(&frame, style, FALSE, WS_EX_DLGMODALFRAME);
+
+	HWND window = CreateWindowExA(WS_EX_DLGMODALFRAME, className, title, style,
+			CW_USEDEFAULT, CW_USEDEFAULT,
+			frame.right - frame.left, frame.bottom - frame.top,
+			owner, nullptr, instance, nullptr);
+	if (!window)
+		return;
+
+	HWND edit = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", crlf.c_str(),
+			WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_TABSTOP
+					| ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
+			12, 12, width - 24, height - 60,
+			window, nullptr, instance, nullptr);
+
+	CreateWindowExA(0, "BUTTON", "Close",
+			WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+			width - 12 - 84, height - 38, 84, 26,
+			window, reinterpret_cast<HMENU>(2), instance, nullptr);
+
+	// Fixed pitch, because the two columns are aligned with spaces and a
+	// proportional face would make a mess of them.
+	HFONT font = CreateFontA(-12, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+			DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+			DEFAULT_QUALITY, FIXED_PITCH | FF_MODERN, "Consolas");
+	SendMessage(edit, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+	HFONT ui = uiFont();
+	EnumChildWindows(window, [](HWND child, LPARAM param) -> BOOL {
+		char cls[16] = { 0 };
+		GetClassNameA(child, cls, sizeof(cls));
+		if (lstrcmpiA(cls, "BUTTON") == 0)
+			SendMessage(child, WM_SETFONT, static_cast<WPARAM>(param), TRUE);
+		return TRUE;
+	}, reinterpret_cast<LPARAM>(ui));
+
+	if (owner)
+		EnableWindow(owner, FALSE);
+	ShowWindow(window, SW_SHOW);
+	// Focus the button rather than the text: Enter and Escape then both close
+	// the page, and no caret blinks in something nobody can edit.
+	SetFocus(GetDlgItem(window, 2));
+
+	MSG message;
+	while (GetMessage(&message, nullptr, 0, 0) > 0) {
+		if (IsDialogMessage(window, &message))
+			continue;
+		TranslateMessage(&message);
+		DispatchMessage(&message);
+	}
+
+	if (owner) {
+		EnableWindow(owner, TRUE);
+		SetForegroundWindow(owner);
+	}
+	DeleteObject(font);
+	DeleteObject(ui);
 }
 
 } // namespace nesfe

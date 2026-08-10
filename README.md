@@ -41,8 +41,9 @@ that keeps the status bar fixed while the level moves beneath it all work.
 | Plugin chooser | `F1`, or `--settings` with no ROM: pick a plugin per job and the window size, saved to `nes.cfg` |
 | Rebinding | the controller plugin's own dialog: press Bind, then press the key or pad button |
 | Plugin settings | each plugin's own dialog — video's filter and pixel shape, audio's device, volume and buffer |
-| Menu bar | native, on Windows: Emulation, State, Settings, Help — with what is not built yet listed and disabled |
+| Menu bar | native, on Windows: Emulation, State, Settings, Help — every item implemented |
 | Loading ROMs | from the menu or the command line; the window opens empty without one, and remembers the last eight |
+| Save states | eight slots beside the ROM, with the whole machine in them: RAM, both chips, the cartridge's registers, and where the beam is |
 | Host services | plugins read the frame, the window handle and their own settings through `nes_host` |
 | Window | `nes_gui`: SDL2 video and audio, keyboard, paced to NTSC's 60.0988 Hz |
 | Headless runner | `nes_run`: tracing, scripted input, PPM screenshots, WAV capture |
@@ -209,9 +210,14 @@ the cartridge -- loading a PAL game into an emulator that started empty has to m
 
 There is a menu bar now, on Windows, so none of the above has to be memorised: **Emulation**
 (reset, hard reset, pause, frame advance, mute, screenshot), **State**, **Settings** and
-**Help**. Items that are not built yet — loading a ROM, the save slots — are listed and
-disabled rather than hidden, because a gap somebody can see beats one they have to guess
-at, and that list is what gets worked down next.
+**Help**. Every item on it now does something. The rule that got it there is still enforced by a
+test: an item may be listed before it is built, but then it has to be visibly disabled --
+a gap somebody can see beats one they have to guess at, and an enabled item that does
+nothing is a bug report.
+
+**Help > Keys and Buttons** lists every binding, read from the configuration rather than
+from a table written by hand: a page that still says `Z` after somebody has moved A to `Q`
+is worse than no page at all.
 
 Two things about it are worth knowing. The window belongs to the *video plugin*, and the
 menu is host business, so the host attaches a menu to a window it did not create using
@@ -341,6 +347,38 @@ The Zapper is scripted the same way, with `--shoot=X,Y@FRAME[:HELD]` in console 
 Giving any `--shoot` plugs a gun into port two instead of a pad. The trigger has to be
 held across several frames, because the game blanks the screen for a frame after it is
 pulled and only then looks for light.
+
+## Save states
+
+Eight slots, written beside the ROM as `.st1` to `.st8`, from the State menu. A slot shows
+when it was written, read from the file rather than remembered, so a state from an earlier
+run is described correctly and a deleted one goes back to reading `(empty)`.
+
+Everything a running console holds goes in: RAM, both chips' registers and counters, the
+cartridge's own registers and work RAM, and where the beam is -- a state taken partway
+down the picture resumes partway down the picture, half-drawn frame included. What is
+deliberately absent is the ROM, because a state is not a copy of the cartridge, and the
+APU's sample buffer, which belongs to the run rather than to the machine.
+
+Each class describes its state **once**, in a `serialize()` that runs in both directions.
+A save routine and a separate load routine drift apart -- somebody adds a field to one and
+not the other, and it surfaces days later as a game that resumes almost correctly.
+
+The format is not portable and does not pretend to be. A state records the version it was
+written by, a fingerprint of the ROM, and the size of every structure it contains, so one
+from a different build or a different game is **refused** rather than misread -- and
+refused with the machine still running, because a half-loaded console is worse than a
+rejected file.
+
+### How they are tested
+
+Not by checking that fields come back. By determinism: run a while, save, run on, load,
+run the same distance again, and compare every pixel. An omission is the only way a save
+state really fails, and an omission is exactly what a field-by-field test cannot see.
+
+That test was itself checked by breaking the code on purpose -- omitting the console's RAM
+from the state made three of the five cases fail, which is how you know a passing run
+means something.
 
 ## Testing
 

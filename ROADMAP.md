@@ -453,9 +453,43 @@ ROM could only be opened from a command line.
    because the menu item was never un-marked when the feature landed, and a ROM named on
    the command line reached the menu's recent list but never the file, because only the
    menu path saved the configuration.
-3. **Save states.** The State menu is already the specification: two actions, eight
-   slots showing when each was written, and a way to walk between them.
-4. **Dialogs and menus off Windows.** Both say so rather than opening nothing.
+3. ~~**Save states.**~~ Done, and the State menu turned out to be a good specification:
+   two actions, eight slots showing when each was written, and a way to walk between them.
+
+   One decision shaped the whole thing: **every class describes its state once**, in a
+   `serialize()` that runs in both directions. A save routine and a separate load routine
+   drift apart the first time somebody adds a field to one of them, and the bug surfaces
+   days later as a game that resumes almost correctly.
+
+   The format is deliberately not portable. It carries its version, a fingerprint of the
+   ROM, and the size of every structure in it, so a state from another build or another
+   game is refused -- and refused *before* anything is restored, because a half-loaded
+   console is worse than a rejected file. A truncated one resets the machine and says so.
+
+   **The test is the interesting part.** Not "does this field come back", but: run a
+   while, save, run on, load, run the same distance again, compare every pixel. An
+   omission is the only real failure mode of a save state, and an omission is precisely
+   what a field-by-field test cannot see. Then the test was checked by breaking the code
+   on purpose -- leaving the console's RAM out of the state failed three of the five
+   cases, which is how a passing run earns any trust at all.
+
+   Worth recording what the state has to include beyond the obvious: the PPU's beam
+   position and half-drawn framebuffer, A12's recent history (or an MMC3 counter resumes
+   against an edge that never happened), the delayed I flag (or restoring inside
+   `CLI; SEI` takes an interrupt the real machine would not), the PAL dot remainder, and
+   the APU's filter history -- three floats, without which a restore clicks.
+4. ~~**Keys and Buttons.**~~ Done, and it is the last item on the bar: everything listed
+   in the menu now does something.
+
+   Built from the configuration each time it opens, not from a table written alongside it.
+   That is the whole design decision, and the test that matters says so directly: rebind A
+   to Q and the page has to say Q. A reference that drifts from the bindings is not merely
+   useless, it tells a person something untrue.
+
+   A read-only edit control rather than a message box, because thirty lines need to scroll
+   and two columns need a fixed pitch to line up -- and because being able to select a line
+   and copy it is a reasonable thing to want from a page listing what your keys do.
+5. **Dialogs and menus off Windows.** Both say so rather than opening nothing.
 
 ## Further out
 
