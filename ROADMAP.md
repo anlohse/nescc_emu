@@ -334,7 +334,22 @@ Roughly in order of how likely a real game is to notice:
   moving the poll, an IRQ landing inside a DMA -- all needs the CPU to poll *within* an
   instruction rather than between them. The core charges an instruction's cycles in one
   lump at the end, so there is no "partway through" to poll at yet. That is a real piece
-  of work on the core and the right next one for it. **47 of 93 pass.**
+  of work on the core and the right next one for it.
+
+  Starting it turned the plan inside out. The intention was to let the CPU tell the bus
+  when it burned a cycle without touching it, so a host could place those cycles
+  properly -- and **a 6502 has none to place**. It drives the bus on every cycle, so the
+  gap between an instruction's cycle count and its access count was never idle time; it
+  was reads this core was not making. The cycle an indexed mode spends adding the index
+  is a read of the address with the carry not yet applied, invisible against RAM and
+  very visible against `$2007` or `$4015`.
+
+  Those reads exist now, which fixes `instr_misc/03-dummy_reads` and leaves `04` failing
+  only on the unstable `SHx` opcodes. **48 of 93 pass.** Wiring them by pattern missed
+  four of the twelve read-modify-write templates, because `ROL`, `ROR`, `RLA` and `RRA`
+  name their local `old` where the rest say `orig` -- and the ROM named `ROL abs,x`
+  specifically, which is a fair argument for the suite over a careful reading of one's
+  own patch.
 - ~~**Bus conflicts** on UxROM and CNROM~~ — done, driven by the NES 2.0 submapper
   rather than guessed from the mapper number.
 - ~~**MMC1's consecutive-write rule.**~~ Done, and it needed fixing in the CPU first: a
