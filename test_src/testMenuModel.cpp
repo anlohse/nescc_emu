@@ -105,10 +105,7 @@ TEST_CASE("what_is_not_built_yet_says_so_and_is_disabled") {
 	// bug report; one that is disabled without being marked is a mystery to
 	// whoever reads this next.
 	const std::vector<MenuSection> bar = buildMenu(loaded());
-	const int notYet[] = {
-		MENU_SAVE_STATE, MENU_LOAD_STATE,
-		MENU_NEXT_SLOT, MENU_PREV_SLOT, MENU_HOTKEYS
-	};
+	const int notYet[] = { MENU_HOTKEYS };
 	for (std::size_t i = 0; i < sizeof(notYet) / sizeof(notYet[0]); i++) {
 		CAPTURE(notYet[i]);
 		const MenuItem* item = find(bar, notYet[i]);
@@ -194,4 +191,35 @@ TEST_CASE("loading_needs_a_file_picker_and_closing_needs_a_cartridge") {
 
 	state.romLoaded = true;
 	CHECK(find(buildMenu(state), MENU_CLOSE_ROM)->enabled);
+}
+
+TEST_CASE("saving_needs_a_cartridge_and_loading_needs_a_written_slot") {
+	MenuState state = loaded();
+	// Eight empty slots: saving is offered, loading is not, because there is
+	// nothing in the current one to load.
+	for (int i = 0; i < MENU_SLOT_COUNT; i++)
+		state.slotLabels.push_back(std::string());
+	CHECK(find(buildMenu(state), MENU_SAVE_STATE)->enabled);
+	CHECK_FALSE(find(buildMenu(state), MENU_LOAD_STATE)->enabled);
+
+	state.slotLabels[0] = "2026-08-10 14:32";
+	CHECK(find(buildMenu(state), MENU_LOAD_STATE)->enabled);
+
+	// Move to a slot that is still empty and loading goes away again.
+	state.saveSlot = 1;
+	CHECK_FALSE(find(buildMenu(state), MENU_LOAD_STATE)->enabled);
+
+	// And with no cartridge, neither is offered whatever the slots say.
+	state.romLoaded = false;
+	state.saveSlot = 0;
+	CHECK_FALSE(find(buildMenu(state), MENU_SAVE_STATE)->enabled);
+	CHECK_FALSE(find(buildMenu(state), MENU_LOAD_STATE)->enabled);
+}
+
+TEST_CASE("walking_between_slots_needs_nothing_at_all") {
+	// Choosing where the next save goes works on an empty machine; it is a
+	// preference rather than an action on the console.
+	const std::vector<MenuSection> bar = buildMenu(MenuState());
+	CHECK(find(bar, MENU_NEXT_SLOT)->enabled);
+	CHECK(find(bar, MENU_PREV_SLOT)->enabled);
 }

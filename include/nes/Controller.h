@@ -1,6 +1,8 @@
 #ifndef NES_CONTROLLER_H
 #define NES_CONTROLLER_H
 
+#include "State.h"
+
 #include <cstdint>
 
 namespace nes {
@@ -106,6 +108,9 @@ public:
 
 	/** Look up a button by name: "a", "start", "up"... @return 0 if unknown. */
 	static std::uint8_t buttonFromName(const char* name);
+
+	/** Save or restore this port. @see nes/State.h */
+	void serialize(State& state);
 
 private:
 	std::uint8_t m_buttons;

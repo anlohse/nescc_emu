@@ -27,6 +27,15 @@ bool fileDialogAvailable();
  */
 bool chooseRomFile(void* parent, const std::string& startDir, std::string* chosen);
 
+/**
+ * When @p path was last written, as "YYYY-MM-DD HH:MM", or empty if it is not
+ * there.
+ *
+ * Read from the file rather than remembered, so a state written by an earlier
+ * run -- or deleted behind the program's back -- is still described correctly.
+ */
+std::string fileWrittenAt(const std::string& path);
+
 } // namespace nesfe
 
 #endif // NES_FRONTEND_FILE_DIALOG_H

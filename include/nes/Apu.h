@@ -2,6 +2,7 @@
 #define NES_APU_H
 
 #include "Region.h"
+#include "State.h"
 
 #include <6502cc/emu_bus.h>
 
@@ -112,6 +113,9 @@ public:
 
 	/** Inspection only: the noise channel's 15-bit shift register. */
 	std::uint16_t noiseShiftRegister() const { return m_noise.shift; }
+
+	/** Save or restore. @see nes/State.h */
+	void serialize(State& state);
 
 private:
 	/** Envelope generator, shared by the pulses and the noise channel. */

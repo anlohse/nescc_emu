@@ -53,6 +53,7 @@ add_library(nes_lib STATIC
     src/Mapper.cpp
     src/NesBus.cpp
     src/Nes.cpp
+    src/State.cpp
     src/Ppu.cpp
 )
 
@@ -175,6 +176,7 @@ if(NES_BUILD_TESTS)
         test_src/testNestest.cpp
         test_src/testPpu.cpp
         test_src/testRegion.cpp
+        test_src/testState.cpp
     )
     target_link_libraries(nes_test PRIVATE nes_lib doctest::doctest)
 

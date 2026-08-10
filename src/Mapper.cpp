@@ -470,4 +470,79 @@ std::size_t Mmc3Mapper::chrOffset(std::uint16_t address) const {
 	return bankOffset(m_chr, bank, BANK_1K) + (addr & (BANK_1K - 1));
 }
 
+/* ------------------------------------------------------------------------- */
+/* Save states                                                                */
+/* ------------------------------------------------------------------------- */
+
+void BankedMapper::serialize(State& state) {
+	state.tag("MAPR");
+	// Work RAM is the part a player would notice losing: it is where a game
+	// with a battery keeps its file, and where every game keeps its variables
+	// if the board has any.
+	state.blob(m_prgRam);
+	state.value(m_mirroring);
+	state.value(m_fourScreen);
+
+	// CHR only when the board has RAM there rather than ROM. Writable CHR is
+	// state; a ROM is a copy of the file and has no business in a save.
+	std::uint8_t chrIsRam = m_chr.empty() ? 0 : (m_chrIsRam ? 1 : 0);
+	state.value(chrIsRam);
+	if (chrIsRam)
+		state.blob(m_chr);
+}
+
+void UxRomMapper::serialize(State& state) {
+	BankedMapper::serialize(state);
+	state.tag("UXRM");
+	state.value(m_bank);
+}
+
+void CnRomMapper::serialize(State& state) {
+	BankedMapper::serialize(state);
+	state.tag("CNRM");
+	state.value(m_bank);
+}
+
+void AxRomMapper::serialize(State& state) {
+	BankedMapper::serialize(state);
+	state.tag("AXRM");
+	state.value(m_bank);
+}
+
+void Mapper87::serialize(State& state) {
+	BankedMapper::serialize(state);
+	state.tag("M087");
+	state.value(m_bank);
+}
+
+void Mmc1Mapper::serialize(State& state) {
+	BankedMapper::serialize(state);
+	state.tag("MMC1");
+	state.value(m_shift);
+	state.value(m_control);
+	state.value(m_chrBank0);
+	state.value(m_chrBank1);
+	state.value(m_prgBank);
+	// The serial port is mid-word as often as not, so both halves of its state
+	// have to travel: what has been shifted in, and how far.
+	state.value(m_instructionsKnown);
+	state.value(m_wroteThisInstruction);
+}
+
+void Mmc3Mapper::serialize(State& state) {
+	BankedMapper::serialize(state);
+	state.tag("MMC3");
+	state.value(m_bankSelect);
+	state.bytes(m_banks, sizeof(m_banks));
+	state.value(m_prgMode);
+	state.value(m_chrInvert);
+	// The IRQ counter is the whole reason a state has to include this board:
+	// restoring mid-frame with a stale counter puts the split on the wrong line.
+	state.value(m_irqLatch);
+	state.value(m_irqCounter);
+	state.value(m_irqReload);
+	state.value(m_irqEnabled);
+	state.value(m_irqPending);
+}
+
 } // namespace nes

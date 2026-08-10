@@ -6,7 +6,10 @@
 #include <windows.h>
 #include <commdlg.h>
 
+#include <cstdio>
 #include <cstring>
+#include <ctime>
+#include <sys/stat.h>
 
 namespace nesfe {
 
@@ -45,6 +48,24 @@ bool chooseRomFile(void* parent, const std::string& startDir, std::string* chose
 		return false;      // cancelled, or closed; not an error
 	*chosen = file;
 	return true;
+}
+
+
+std::string fileWrittenAt(const std::string& path) {
+	if (path.empty())
+		return std::string();
+	struct _stat64 info;
+	if (_stat64(path.c_str(), &info) != 0)
+		return std::string();
+
+	std::tm parts;
+	if (localtime_s(&parts, &info.st_mtime) != 0)
+		return std::string();
+	char text[32];
+	std::snprintf(text, sizeof(text), "%04d-%02d-%02d %02d:%02d",
+			parts.tm_year + 1900, parts.tm_mon + 1, parts.tm_mday,
+			parts.tm_hour, parts.tm_min);
+	return text;
 }
 
 } // namespace nesfe

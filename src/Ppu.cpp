@@ -734,4 +734,52 @@ void Ppu::vramWrite(std::uint16_t address, std::uint8_t value) {
 	m_palette[mirrorPalette(addr)] = value & 0x3F;
 }
 
+/* ------------------------------------------------------------------------- */
+/* Save states                                                                */
+/* ------------------------------------------------------------------------- */
+
+void Ppu::serialize(State& state) {
+	state.tag("PPU ");
+
+	state.value(m_ctrl);
+	state.value(m_mask);
+	state.value(m_status);
+	state.value(m_oamAddr);
+	state.value(m_vramAddr);
+	state.value(m_tempAddr);
+	state.value(m_fineX);
+	state.value(m_writeToggle);
+	state.value(m_readBuffer);
+	state.value(m_openBus);
+
+	// Where in the frame the beam is. Without this a state restored mid-picture
+	// resumes at the top and the game's own split lands somewhere else.
+	state.value(m_scanline);
+	state.value(m_dot);
+	state.value(m_frame);
+
+	state.value(m_nmiPending);
+	state.value(m_nmiDelay);
+	state.value(m_sprite0HitDot);
+	state.value(m_dotsSinceVblank);
+	state.value(m_dotsSinceVblankEnd);
+	state.value(m_vblankRaces);
+
+	// A12's history, or an MMC3 counter resumes against an edge that never
+	// happened.
+	state.value(m_a12);
+	state.value(m_a12LowDots);
+	state.bytes(m_spriteFetchA12.data(), m_spriteFetchA12.size());
+
+	state.bytes(m_vram.data(), m_vram.size());
+	state.bytes(m_palette.data(), m_palette.size());
+	state.bytes(m_oam.data(), m_oam.size());
+
+	// The picture itself. It is derived rather than fundamental, and it is here
+	// anyway: a state restored partway down a frame has a half-drawn screen, and
+	// rebuilding the top half from nothing would show a seam for one frame.
+	state.bytes(m_framebuffer.data(), m_framebuffer.size());
+	state.bytes(m_sprPattern.data(), m_sprPattern.size());
+}
+
 } // namespace nes

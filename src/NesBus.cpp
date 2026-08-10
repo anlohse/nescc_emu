@@ -245,4 +245,30 @@ std::uint8_t NesBus::peek(std::uint16_t address) const {
 	return 0;
 }
 
+/* ------------------------------------------------------------------------- */
+/* Save states                                                                */
+/* ------------------------------------------------------------------------- */
+
+void NesBus::serialize(State& state) {
+	state.tag("BUS ");
+	state.bytes(m_ram.data(), m_ram.size());
+	state.value(m_dmaStall);
+
+	// The dot fraction matters on PAL, where a CPU cycle is 3.2 dots: dropping
+	// the remainder would shift the whole picture by up to a dot per restore.
+	state.value(m_dotRemainder);
+	state.value(m_accountedCycles);
+	state.value(m_ticking);
+
+	for (int port = 0; port < 2; port++)
+		m_controllers[port].serialize(state);
+
+	// The counters are diagnostics rather than machine state, and they are here
+	// so that a state resumed twice reports the same numbers as one run
+	// straight through -- which is what the determinism test compares.
+	state.value(m_stubReads);
+	state.value(m_stubWrites);
+	state.value(m_overruns);
+}
+
 } // namespace nes
