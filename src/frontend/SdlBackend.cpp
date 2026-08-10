@@ -60,8 +60,8 @@ SDL_JoystickID instanceId(SDL_GameController* pad) {
 
 SdlVideo::SdlVideo(const nes_host* host) :
 		m_host(host), m_window(nullptr), m_renderer(nullptr), m_texture(nullptr),
-		m_width(0), m_height(0), m_logicalWidth(0),
-		m_textureWidth(0), m_textureHeight(0), m_crt(false) {
+		m_width(0), m_height(0), m_logicalWidth(0), m_crt(false),
+		m_mask(nullptr), m_maskWidth(0), m_maskHeight(0) {
 	// The console's fixed palette, pre-expanded with an opaque alpha.
 	const std::uint32_t* rgb = nes::Ppu::nesPaletteRgb();
 	for (int i = 0; i < 64; i++)
@@ -75,8 +75,7 @@ SdlVideo::~SdlVideo() {
 bool SdlVideo::open(const VideoOptions& options, Error* error) {
 	m_width = nes::Ppu::SCREEN_WIDTH;
 	m_height = nes::Ppu::SCREEN_HEIGHT;
-	m_pixels.assign(static_cast<std::size_t>(m_width) * m_height
-			* CRT_SCALE * CRT_SCALE, 0);
+	m_pixels.assign(static_cast<std::size_t>(m_width) * m_height, 0);
 
 	m_window = SDL_CreateWindow(options.title,
 			SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
@@ -107,30 +106,36 @@ bool SdlVideo::open(const VideoOptions& options, Error* error) {
 	// photographs, and most people want to see them.
 	const std::string filter = setting("filter", "sharp");
 	m_crt = (filter == "crt");
+	m_logicalWidth = (setting("aspect", "square") == "tv") ? WIDE_WIDTH : m_width;
 
-	// The CRT style draws a pattern inside every console pixel, so its texture is
-	// three times the size and the renderer is told that *is* the picture. The
-	// logical size follows, which keeps the letterboxing and the aspect choice
-	// working exactly as they did.
-	const int scale = m_crt ? CRT_SCALE : 1;
-	m_textureWidth = m_width * scale;
-	m_textureHeight = m_height * scale;
-	m_logicalWidth = ((setting("aspect", "square") == "tv")
-			? WIDE_WIDTH : m_width) * scale;
-	SDL_RenderSetLogicalSize(m_renderer, m_logicalWidth, m_height * scale);
+	// The CRT style letterboxes for itself, because its mask has to land on whole
+	// screen pixels: under a logical size the mask would be scaled along with the
+	// picture, and one-pixel stripes stretched by 3.4 turn into moire.
+	if (!m_crt)
+		SDL_RenderSetLogicalSize(m_renderer, m_logicalWidth, m_height);
 
-	// Linear for the CRT style as well: at exactly 3x the texture lands 1:1 and
-	// nothing is resampled, and at any other size a smooth reduction of the
-	// stripes looks far more like a television than a jagged one.
+	// A television was never sharp -- soft beam, bandwidth-limited signal,
+	// phosphor spreading whatever light it got -- so the CRT style stretches with
+	// a linear filter and multiplies the mask over the result. Blurring first is
+	// what stops it looking like a grid of coloured squares.
 	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY,
 			(filter == "smooth" || m_crt) ? "linear" : "nearest");
 
 	m_texture = SDL_CreateTexture(m_renderer, SDL_PIXELFORMAT_ARGB8888,
-			SDL_TEXTUREACCESS_STREAMING, m_textureWidth, m_textureHeight);
+			SDL_TEXTUREACCESS_STREAMING, m_width, m_height);
 	if (!m_texture) {
 		if (error) *error = std::string("SDL_CreateTexture: ") + SDL_GetError();
 		close();
 		return false;
+	}
+
+	if (m_crt) {
+		// A multiply cannot add light, so what the mask is about to take has to
+		// be paid in beforehand.
+		std::uint32_t brightened[64];
+		brightenForCrt(m_argbPalette, brightened);
+		for (int i = 0; i < 64; i++)
+			m_argbPalette[i] = brightened[i];
 	}
 
 	// The arrow sits exactly where a light gun is being aimed, which is the one
@@ -148,27 +153,88 @@ void SdlVideo::close() {
 	// Whoever opens a window next gets the cursor back in the state they would
 	// expect to find it, rather than one this instance left behind.
 	SDL_ShowCursor(SDL_ENABLE);
+	if (m_mask) { SDL_DestroyTexture(m_mask); m_mask = nullptr; }
+	m_maskWidth = 0;
+	m_maskHeight = 0;
 	if (m_texture) { SDL_DestroyTexture(m_texture); m_texture = nullptr; }
 	if (m_renderer) { SDL_DestroyRenderer(m_renderer); m_renderer = nullptr; }
 	if (m_window) { SDL_DestroyWindow(m_window); m_window = nullptr; }
+}
+
+SDL_Rect SdlVideo::pictureRect() const {
+	// Letterboxed by hand, which is what SDL_RenderSetLogicalSize would do -- but
+	// the CRT style needs the destination in whole screen pixels so its mask can
+	// line up with them.
+	int windowWidth = 0;
+	int windowHeight = 0;
+	SDL_GetRendererOutputSize(m_renderer, &windowWidth, &windowHeight);
+
+	SDL_Rect into;
+	const int byWidth = windowWidth * m_height / m_logicalWidth;
+	if (byWidth <= windowHeight) {
+		into.w = windowWidth;
+		into.h = byWidth;
+	} else {
+		into.h = windowHeight;
+		into.w = windowHeight * m_logicalWidth / m_height;
+	}
+	into.x = (windowWidth - into.w) / 2;
+	into.y = (windowHeight - into.h) / 2;
+	return into;
+}
+
+void SdlVideo::ensureMask(const SDL_Rect& into) {
+	if (m_mask && m_maskWidth == into.w && m_maskHeight == into.h)
+		return;                        // the window has not changed size
+
+	if (m_mask)
+		SDL_DestroyTexture(m_mask);
+	m_maskWidth = into.w;
+	m_maskHeight = into.h;
+	m_mask = SDL_CreateTexture(m_renderer, SDL_PIXELFORMAT_ARGB8888,
+			SDL_TEXTUREACCESS_STATIC, m_maskWidth, m_maskHeight);
+	if (!m_mask)
+		return;
+
+	std::vector<std::uint32_t> pattern(
+			static_cast<std::size_t>(m_maskWidth) * m_maskHeight, 0);
+	buildCrtMask(m_maskWidth, m_maskHeight, m_height, pattern.data());
+	SDL_UpdateTexture(m_mask, nullptr, pattern.data(),
+			m_maskWidth * static_cast<int>(sizeof(std::uint32_t)));
+	// Modulate: every channel of the picture is multiplied by the mask's. One
+	// blended pass over pixels the GPU was going to touch anyway.
+	SDL_SetTextureBlendMode(m_mask, SDL_BLENDMODE_MOD);
+	// Nearest, so a stripe stays one screen pixel wide instead of being smoothed
+	// into a grey wash -- the blur belongs to the picture, not to the glass.
+	SDL_SetTextureScaleMode(m_mask, SDL_ScaleModeNearest);
 }
 
 void SdlVideo::present(const std::uint8_t* indices, int width, int height) {
 	if (!m_texture || width != m_width || height != m_height)
 		return;
 
-	if (m_crt) {
-		crtExpand(indices, m_width, m_height, m_argbPalette, m_pixels.data());
-	} else {
-		const std::size_t count = static_cast<std::size_t>(m_width) * m_height;
-		for (std::size_t i = 0; i < count; i++)
-			m_pixels[i] = m_argbPalette[indices[i] & 0x3F];
-	}
+	const std::size_t count = static_cast<std::size_t>(m_width) * m_height;
+	for (std::size_t i = 0; i < count; i++)
+		m_pixels[i] = m_argbPalette[indices[i] & 0x3F];
 
 	SDL_UpdateTexture(m_texture, nullptr, m_pixels.data(),
-			m_textureWidth * static_cast<int>(sizeof(std::uint32_t)));
+			m_width * static_cast<int>(sizeof(std::uint32_t)));
+	SDL_SetRenderDrawColor(m_renderer, 0, 0, 0, 255);
 	SDL_RenderClear(m_renderer);
-	SDL_RenderCopy(m_renderer, m_texture, nullptr, nullptr);
+
+	if (!m_crt) {
+		SDL_RenderCopy(m_renderer, m_texture, nullptr, nullptr);
+		SDL_RenderPresent(m_renderer);
+		return;
+	}
+
+	// The two stages, in the order a television did them: stretch it soft, then
+	// multiply by the mask.
+	const SDL_Rect into = pictureRect();
+	SDL_RenderCopy(m_renderer, m_texture, nullptr, &into);
+	ensureMask(into);
+	if (m_mask)
+		SDL_RenderCopy(m_renderer, m_mask, nullptr, &into);
 	SDL_RenderPresent(m_renderer);
 }
 
@@ -194,26 +260,32 @@ void SdlVideo::windowToFrame(int windowX, int windowY, int* frameX, int* frameY)
 	if (!m_renderer)
 		return;
 
-	float logicalX = 0.0f;
-	float logicalY = 0.0f;
-	SDL_RenderWindowToLogical(m_renderer, windowX, windowY, &logicalX, &logicalY);
+	int x = 0;
+	int y = 0;
+	if (m_crt) {
+		// No logical size to ask about in this mode, because the mask needs whole
+		// screen pixels; the same rectangle that was drawn into is what maps back.
+		const SDL_Rect into = pictureRect();
+		if (into.w <= 0 || into.h <= 0)
+			return;
+		x = (windowX - into.x) * m_width / into.w;
+		y = (windowY - into.y) * m_height / into.h;
+	} else {
+		float logicalX = 0.0f;
+		float logicalY = 0.0f;
+		SDL_RenderWindowToLogical(m_renderer, windowX, windowY,
+				&logicalX, &logicalY);
 
-	// Logical units are not console pixels whenever the renderer is working in a
-	// bigger space than the framebuffer: stretched to the television's aspect it
-	// is 292 wide against 256, and with the CRT style it is three times both. A
-	// light gun asking where it is pointed wants the pixel, so undo whatever the
-	// scale is rather than reporting a row or column that does not exist.
-	//
-	// Both axes. Y needed no correction until the CRT style made the logical
-	// height 720 against a 240-line picture, at which point every shot would
-	// have read as off the screen.
-	const int logicalHeight = m_crt ? m_height * CRT_SCALE : m_height;
-	const int x = (m_logicalWidth > 0 && m_logicalWidth != m_width)
-			? static_cast<int>(logicalX) * m_width / m_logicalWidth
-			: static_cast<int>(logicalX);
-	const int y = (logicalHeight != m_height)
-			? static_cast<int>(logicalY) * m_height / logicalHeight
-			: static_cast<int>(logicalY);
+		// Logical units are not console pixels when the renderer works in a wider
+		// space than the framebuffer: stretched to the television's aspect it is
+		// 292 across against 256. A light gun wants the pixel, so undo that
+		// rather than reporting a column which does not exist.
+		x = (m_logicalWidth > 0 && m_logicalWidth != m_width)
+				? static_cast<int>(logicalX) * m_width / m_logicalWidth
+				: static_cast<int>(logicalX);
+		y = static_cast<int>(logicalY);
+	}
+
 	// Outside the picture is a real answer here, not a failure: the player is
 	// pointing the gun at the letterbox, or off the television entirely.
 	if (x < 0 || y < 0 || x >= m_width || y >= m_height)
@@ -281,11 +353,12 @@ void SdlVideo::setTitle(const char* title) {
 bool SdlVideo::saveScreenshot(const char* path) {
 	if (m_pixels.empty())
 		return false;
-	// Whatever is in the texture, including the CRT pattern if that is on: a
-	// screenshot of a television should look like the television.
+	// The picture as the console drew it, 256x240. The CRT look lives in the
+	// stretch and the mask, both of which happen on the GPU after this -- so a
+	// screenshot is the signal rather than a photograph of the television.
 	SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormatFrom(
-			m_pixels.data(), m_textureWidth, m_textureHeight, 32,
-			m_textureWidth * static_cast<int>(sizeof(std::uint32_t)),
+			m_pixels.data(), m_width, m_height, 32,
+			m_width * static_cast<int>(sizeof(std::uint32_t)),
 			SDL_PIXELFORMAT_ARGB8888);
 	if (!surface)
 		return false;

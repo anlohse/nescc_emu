@@ -2,57 +2,79 @@
 #define NES_FRONTEND_CRT_FILTER_H
 
 //
-// What a console picture looked like on a television.
+// What a console picture looked like on a television, in two stages.
 //
-// A CRT never showed a grid of flat squares. Colour came from three phosphor
-// stripes behind a mask, so a white pixel was a red stripe beside a green one
-// beside a blue one, and the eye did the mixing. And the beam drew lines with
-// gaps between them, so brightness fell away at the bottom of each one.
+// A CRT did two separate things to a picture, and doing them in the wrong order
+// is what makes an imitation look like a grid of coloured squares instead.
 //
-// Both of those are reproducible without a shader, which matters because
-// SDL_Renderer does not portably offer one: each console pixel becomes a 3x3
-// cell, the three columns carry red, green and blue, and the last row is dimmer.
+//   1. It blurred it. The beam was a spot with soft edges, the signal was
+//      bandwidth-limited, and the phosphor spread what light it got. Nothing
+//      about a television was sharp.
+//   2. It multiplied what was left by a mask. Colour came from three phosphor
+//      stripes behind a grille, and the beam drew lines with gaps between them.
+//
+// So: stretch with a linear filter first, then multiply by
 //
 //   [R  G  B ]
 //   [R  G  B ]
 //   [r  g  b ]      <- dimmer, where the beam was fading
 //
-// Each column keeps its own channel whole and dims the other two rather than
-// dropping them entirely. That is a measurement rather than a preference: pure
-// separation costs two thirds of the light and gain cannot buy it back, because
-// almost every NES colour already has a channel near full and multiplying clips
-// it. Strong stripes keep the pattern and three quarters of the brightness. The
-// numbers, and the measurement, are in CrtFilter.cpp and its test.
+// The important part is *where* that mask lives. It is a property of the screen,
+// not of the signal -- the stripes were in the glass, at a pitch that had nothing
+// to do with what resolution was being displayed. So it is built in output pixels
+// and multiplied over the stretched picture, which is both more faithful and the
+// reason this works at any window size rather than only at 3x.
+//
+// Scanlines are the other way around: they *are* in the signal, one per line the
+// console drew, so their spacing follows the source rather than the screen.
+//
+// The multiply is one blended draw on the GPU, and the stretch is what a
+// renderer does anyway. Nothing here touches a pixel per frame.
 //
 
 #include <cstdint>
 
 namespace nesfe {
 
-/** Every console pixel becomes this many across and down. */
-const int CRT_SCALE = 3;
+/** How many output pixels one red-green-blue triad of the mask spans. */
+const int CRT_MASK_PITCH = 3;
 
-/**
- * How much of the other two channels a column loses. 1.0 is pure separation.
- */
+/** How much of the other two channels a stripe removes. 1.0 is pure separation. */
 extern const float CRT_STRIPE;
 
-/** A modest lift, to pay back part of what the mask takes. */
-extern const float CRT_GAIN;
-
-/** How bright the last row of each cell is, relative to the first two. */
+/** How dark the gap between two scanlines is, relative to a line's middle. */
 extern const float CRT_SCANLINE;
 
 /**
- * Expand @p indices into @p out, which must hold (width * CRT_SCALE) by
- * (height * CRT_SCALE) pixels.
+ * The gamma exponent applied before the mask. Below 1.0 brightens.
  *
- * @param indices  console pixels, 0-63 palette entries
- * @param palette  64 entries of 0xAARRGGBB
- * @param out      destination, row-major, same pixel format as the palette
+ * A multiply can only remove light, so what the mask costs has to be paid in
+ * before it -- and a curve is the way to pay, not a multiply. Most NES colours
+ * already have a channel at 255, where a multiply has nowhere to put the light
+ * and clips: the channel keeps its value while the other two grow, which is not
+ * a brighter colour but a different one. A curve through (0,0) and (255,255)
+ * lifts the midtones, where a masked picture actually looks gloomy, and cannot
+ * clip anything at all.
  */
-void crtExpand(const std::uint8_t* indices, int width, int height,
-		const std::uint32_t* palette, std::uint32_t* out);
+extern const float CRT_LIFT;
+
+/**
+ * Build the mask for a picture @p width by @p height output pixels.
+ *
+ * @param sourceLines  how many lines the console drew, which is what sets the
+ *                     scanline spacing -- 240 for the NES.
+ * @param out          width * height pixels of 0xAARRGGBB, to be multiplied
+ *                     over the stretched picture.
+ */
+void buildCrtMask(int width, int height, int sourceLines, std::uint32_t* out);
+
+/**
+ * The console palette, lifted by CRT_LIFT, for use with the mask.
+ *
+ * @param palette  64 entries of 0xAARRGGBB
+ * @param out      64 entries, clamped
+ */
+void brightenForCrt(const std::uint32_t* palette, std::uint32_t* out);
 
 } // namespace nesfe
 

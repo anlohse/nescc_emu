@@ -81,16 +81,22 @@ private:
 	/** What the renderer's logical width is: m_width, or WIDE_WIDTH. */
 	int m_logicalWidth;
 
-	/**
-	 * The texture's own size, which is the console's unless a filter expands it.
-	 *
-	 * The CRT style has to draw a pattern *within* each console pixel, so it
-	 * needs a texture three times the size and a renderer told to treat that as
-	 * the picture. Everything else uploads 256x240 and lets the renderer scale.
-	 */
-	int m_textureWidth;
-	int m_textureHeight;
 	bool m_crt;
+	/**
+	 * The mask, multiplied over the stretched picture.
+	 *
+	 * Built in output pixels and rebuilt whenever the window changes size,
+	 * because the stripes are a property of the screen rather than of the
+	 * signal -- which is what makes the effect work at any size instead of only
+	 * at an exact 3x.
+	 */
+	SDL_Texture* m_mask;
+	int m_maskWidth;
+	int m_maskHeight;
+
+	/** Where the picture goes in the window, letterboxed to its aspect. */
+	SDL_Rect pictureRect() const;
+	void ensureMask(const SDL_Rect& into);
 };
 
 /** Queued audio: no callback thread, so no locking against one. */

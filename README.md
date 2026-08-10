@@ -41,7 +41,7 @@ that keeps the status bar fixed while the level moves beneath it all work.
 | Plugin chooser | `F1`, or `--settings` with no ROM: pick a plugin per job and the window size, saved to `nes.cfg` |
 | Rebinding | the controller plugin's own dialog: press Bind, then press the key or pad button |
 | Plugin settings | each plugin's own dialog — video's scaling style and pixel shape, audio's device, volume and buffer |
-| CRT style | RGB stripes and scanlines, drawn into a 3x expansion of every console pixel |
+| CRT style | a soft stretch, then an RGB stripe-and-scanline mask multiplied over it |
 | Menu bar | native, on Windows: Emulation, State, Settings, Help — every item implemented |
 | Loading ROMs | from the menu or the command line; the window opens empty without one, and remembers the last eight |
 | Save states | eight slots beside the ROM, with the whole machine in them: RAM, both chips, the cartridge's registers, and where the beam is |
@@ -227,19 +227,48 @@ plugin owning its window: the alternative was an ABI call obliging every video p
 ever written to host a menu. And the window grows by exactly the menu's height, so the
 picture keeps the size that was asked for instead of losing a strip to it.
 
-**Scaling** offers Sharp, Smooth, or **CRT**. The last one is not a blur: every console
-pixel becomes a 3x3 cell whose three columns lead with red, green and blue and whose last
-row is dimmer, which is a mask and a scanline rather than a filter over the top. It looks
-exactly right at 3x, where the expansion lands 1:1 on your screen, and fine at other sizes
-because the renderer reduces it smoothly.
+**Scaling** offers Sharp, Smooth, or **CRT**, and the CRT style does two separate things in
+the order a television did them. First it stretches the picture with a linear filter,
+because nothing about a television was sharp — the beam was a spot with soft edges, the
+signal was bandwidth-limited, and the phosphor spread whatever light it got. Then it
+multiplies a mask over the result:
 
-Two things about it came out of measurement rather than taste. Pure separation -- each
-column carrying *only* its own channel -- costs two thirds of the light, and gain cannot
-buy that back: almost every NES colour already has a channel near full, so multiplying
-clips it. Raising the gain from 2 to 5 across the whole palette bought 6% more brightness
-and clipped 120 of its 192 channels flat. So the stripes are strong rather than absolute,
-which is closer to a real mask anyway, and the picture keeps about three quarters of its
-brightness.
+```
+[R  G  B ]
+[R  G  B ]
+[r  g  b ]   <- dimmer, where the beam was fading between lines
+```
+
+The order is the whole thing. Doing the mask first and stretching afterwards gives a grid
+of coloured squares; blurring first is what makes it read as a television. It also costs
+nothing — the stretch is what a renderer does anyway, and the mask is one blended draw, so
+no pixel is touched per frame and it works at any window size rather than only at 3x.
+
+Where the mask lives matters too. The stripes are a property of the *screen* — they were in
+the glass, at a pitch that had nothing to do with what resolution was being displayed — so
+the mask is built in output pixels. Scanlines are the other way round: they are in the
+*signal*, one per line the console drew, so their spacing follows 240 rather than the
+window.
+
+Three things about it came out of measuring screenshots rather than from taste, and each
+one changed the design:
+
+- **Brightness is paid with a curve, not a multiply.** A mask can only remove light, so
+  what it takes has to be paid in beforehand — but most NES colours already have a channel
+  at 255, where a multiply has nowhere to put it and clips. With a linear gain the mask took
+  42% of Mario's sky and only 16% of its red and green, and the sky turned lavender. A gamma
+  lift through (0,0) and (255,255) has room everywhere in between and cannot clip anything.
+- **The stripes are weak and the scanlines are strong.** Anything the mask takes evenly is
+  just a dimmer television, which is right; taking it unevenly is a different colour rather
+  than a darker one. A scanline dims all three channels together so it cannot shift a hue
+  however deep it goes, which is why it carries most of the effect.
+- **The beam is integrated over each row, not sampled once in it.** An 8:7 picture
+  letterboxed into a 720-pixel window is 2.63 rows per console line, so every line meets the
+  rows at a different phase. One sample per row put the seams at 98, 109 and 116 against a
+  135 line — wide horizontal bands that look like a fault rather than like a television.
+  Integrating has no phase to be wrong about, and the closed form costs two cosines.
+
+The picture ends up at about four fifths of its unfiltered brightness, with hues intact.
 
 Reset and Hard Reset are genuinely different. Reset is the button on the front — RAM
 survives it, and so do A, X and Y. Hard Reset is the switch at the back, and clears them.
