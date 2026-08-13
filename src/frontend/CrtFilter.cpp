@@ -83,58 +83,38 @@ inline float beamLevel(float from, float to) {
 
 } // namespace
 
+float getAlterLevel(int row) {
+	switch (row) {
+	case 0: return 0.66f;
+	case 1: return 0.66f;
+	}
+	return 1.0f;
+}
+float getNormalLevel(int row) {
+	switch (row) {
+	case 2: return 0.5f;
+	}
+	return 1.0f;
+}
+
 void buildCrtMask(int width, int height, int sourceLines, CrtMaskKind kind,
 		std::uint32_t* out) {
-	const float other = 1.0f - CRT_STRIPE;
-
-	// How many output rows one console line covers -- three at 3x, and something
-	// awkward like 2.63 once an 8:7 picture has been letterboxed into a window.
-	const float rowsPerLine = (sourceLines > 0)
-			? static_cast<float>(height) / static_cast<float>(sourceLines)
-			: 1.0f;
-	const float linesPerRow = 1.0f / rowsPerLine;
 
 	for (int y = 0; y < height; y++) {
-		// The beam, brightest down the middle of its line and darkest at the seam
-		// with the next one -- and *integrated* over the row rather than sampled
-		// once in it, because a row of pixels covers a span of the line and
-		// receives all of it.
-		//
-		// That distinction is the whole of this function's difficulty. At a
-		// fractional scale every line meets the rows at a different phase, so a
-		// single sample per row lands somewhere different each time and the error
-		// shows up as wide horizontal bands. Measured on a screenshot: seams at
-		// 98, 109 and 116 against a 135 line, which looks like a fault in the
-		// emulator rather than like a television. An integral over the row has no
-		// phase to be wrong about -- every line loses the same light whatever the
-		// scale -- and the closed form costs two cosines.
-		const float rowTop = static_cast<float>(y) * linesPerRow;
-		const float rowBottom = rowTop + linesPerRow;
-		const float aligned = beamLevel(rowTop, rowBottom);
 
-		// And the same row again, half a line further down the beam, for the
-		// columns whose slots are staggered. Free, because the integral takes a
-		// position rather than an index: half a line is no harder to ask for than
-		// a whole one.
-		const float staggered = (kind == CRT_SLOT_MASK)
-				? beamLevel(rowTop + CRT_STAGGER, rowBottom + CRT_STAGGER)
-				: aligned;
+		int row = y % 3;
 
 		for (int x = 0; x < width; x++) {
-			// The mask's own pitch, in screen pixels, with nothing to do with what
-			// resolution is being shown -- because the stripes were in the glass.
-			const int stripe = x % CRT_MASK_PITCH;
-
-			// On a slot mask the colour columns run straight down the tube like a
-			// grille's; what alternates is where the bridges between slots fall, so
-			// neighbouring triad columns have their dark bands half a line apart.
-			// That is the brick wall, on its side.
-			const bool offsetColumn = ((x / CRT_MASK_PITCH) & 1) != 0;
-			const float lineLevel = offsetColumn ? staggered : aligned;
-
-			const float r = (stripe == 0 ? 1.0f : other) * lineLevel;
-			const float g = (stripe == 1 ? 1.0f : other) * lineLevel;
-			const float b = (stripe == 2 ? 1.0f : other) * lineLevel;
+			const int col = (x % CRT_MASK_PITCH);
+			const bool alterCol = (x / CRT_MASK_PITCH) % 2 == 1 && kind == CRT_SLOT_MASK;
+		
+			const float lineLevel = alterCol 
+				? getAlterLevel(row)
+				: getNormalLevel(row);
+				
+			const float r = (col == 0 ? 1.0f : 0.66f) * lineLevel;
+			const float g = (col == 1 ? 1.0f : 0.66f) * lineLevel;
+			const float b = (col == 2 ? 1.0f : 0.66f) * lineLevel;
 
 			out[y * width + x] = 0xFF000000u
 					| (static_cast<std::uint32_t>(multiplier(r)) << 16)
