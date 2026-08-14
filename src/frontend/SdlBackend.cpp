@@ -447,14 +447,14 @@ void SdlAudio::clear() {
 
 SdlInput::SdlInput() :
 		m_owned(nesgui::Config::defaults()), m_config(m_owned), m_loadOwn(true) {
-	m_pads[0] = nullptr;
-	m_pads[1] = nullptr;
+	for (int i = 0; i < nesgui::MAX_GAMEPADS; i++)
+		m_pads[i] = nullptr;
 }
 
 SdlInput::SdlInput(const nesgui::Config& config) :
 		m_owned(nesgui::Config::defaults()), m_config(config), m_loadOwn(false) {
-	m_pads[0] = nullptr;
-	m_pads[1] = nullptr;
+	for (int i = 0; i < nesgui::MAX_GAMEPADS; i++)
+		m_pads[i] = nullptr;
 }
 
 SdlInput::~SdlInput() {
@@ -476,42 +476,53 @@ bool SdlInput::open(Error* /*error*/) {
 }
 
 void SdlInput::close() {
-	for (int port = 0; port < 2; port++)
-		if (m_pads[port]) {
-			SDL_GameControllerClose(m_pads[port]);
-			m_pads[port] = nullptr;
+	for (int i = 0; i < nesgui::MAX_GAMEPADS; i++)
+		if (m_pads[i]) {
+			SDL_GameControllerClose(m_pads[i]);
+			m_pads[i] = nullptr;
 		}
 }
 
 void SdlInput::addPad(int deviceIndex) {
 	if (!SDL_IsGameController(deviceIndex))
 		return;
-	for (int port = 0; port < 2; port++) {
-		if (m_pads[port])
+	// Into the first free slot, and that slot number is what a person chooses
+	// between: "Gamepad 1" is this list's first entry, not console port one.
+	// Opening a pad no longer decides anything about who is playing, which is the
+	// point -- an adapter presenting a socket it has nothing plugged into can no
+	// longer take a player's controls with it.
+	for (int i = 0; i < nesgui::MAX_GAMEPADS; i++) {
+		if (m_pads[i])
 			continue;
-		m_pads[port] = SDL_GameControllerOpen(deviceIndex);
-		if (m_pads[port])
-			SDL_Log("gamepad on port %d: %s", port + 1,
-					SDL_GameControllerName(m_pads[port]));
+		m_pads[i] = SDL_GameControllerOpen(deviceIndex);
+		if (m_pads[i])
+			SDL_Log("gamepad %d: %s", i + 1, SDL_GameControllerName(m_pads[i]));
 		return;
 	}
-	// More than two pads: the console only has two ports.
 }
 
 void SdlInput::removePad(SDL_JoystickID id) {
-	for (int port = 0; port < 2; port++) {
-		if (!m_pads[port] || instanceId(m_pads[port]) != id)
+	for (int i = 0; i < nesgui::MAX_GAMEPADS; i++) {
+		if (!m_pads[i] || instanceId(m_pads[i]) != id)
 			continue;
-		SDL_GameControllerClose(m_pads[port]);
-		m_pads[port] = nullptr;
-		SDL_Log("gamepad removed from port %d", port + 1);
+		SDL_GameControllerClose(m_pads[i]);
+		m_pads[i] = nullptr;
+		SDL_Log("gamepad %d removed", i + 1);
 	}
 }
 
 int SdlInput::portOf(SDL_JoystickID id) const {
-	for (int port = 0; port < 2; port++)
-		if (m_pads[port] && instanceId(m_pads[port]) == id)
+	// Which console port, if any, is set to read this device. A pad nobody
+	// selected drives nothing, however hard it is pressed -- which is what makes
+	// two players unambiguous.
+	for (int port = 0; port < 2; port++) {
+		if (m_config.device[port] != nesgui::PORT_GAMEPAD)
+			continue;
+		const int which = m_config.gamepad[port];
+		if (which >= 0 && which < nesgui::MAX_GAMEPADS && m_pads[which]
+				&& instanceId(m_pads[which]) == id)
 			return port;
+	}
 	return -1;
 }
 
@@ -556,11 +567,22 @@ void SdlInput::configure() {
 }
 
 int SdlInput::padCount() const {
-	return (m_pads[0] ? 1 : 0) + (m_pads[1] ? 1 : 0);
+	int count = 0;
+	for (int i = 0; i < nesgui::MAX_GAMEPADS; i++)
+		if (m_pads[i])
+			count++;
+	return count;
 }
 
 std::uint8_t SdlInput::readPad(int port) const {
-	SDL_GameController* pad = m_pads[port];
+	// The pad this port was told to read, not whichever happened to be found
+	// first. A port set to the keyboard reads no pad at all.
+	if (m_config.device[port] != nesgui::PORT_GAMEPAD)
+		return 0;
+	const int which = m_config.gamepad[port];
+	if (which < 0 || which >= nesgui::MAX_GAMEPADS)
+		return 0;
+	SDL_GameController* pad = m_pads[which];
 	if (!pad)
 		return 0;
 	const SDL_GameControllerButton (&map)[8] = m_config.padButtons[port];
@@ -630,8 +652,12 @@ void SdlInput::poll(InputState* out) {
 			if (port >= 0)
 				tapped[port] |= padButtonFor(event.cbutton.button, port);
 		} else if (event.type == SDL_KEYDOWN && event.key.repeat == 0) {
-			tapped[0] |= buttonForKey(event.key.keysym.scancode, m_config.keys[0]);
-			tapped[1] |= buttonForKey(event.key.keysym.scancode, m_config.keys[1]);
+			// Only for a port actually set to the keyboard, or a tap would reach a
+			// port being driven by a pad.
+			for (int port = 0; port < 2; port++)
+				if (m_config.device[port] == nesgui::PORT_KEYBOARD)
+					tapped[port] |= buttonForKey(event.key.keysym.scancode,
+							m_config.keys[port]);
 			switch (event.key.keysym.scancode) {
 			case SDL_SCANCODE_ESCAPE:  out->commands |= COMMAND_QUIT; break;
 			case SDL_SCANCODE_P:
@@ -646,12 +672,17 @@ void SdlInput::poll(InputState* out) {
 		}
 	}
 
-	// Keyboard and pad both drive the same port, so a pad can be picked up
-	// mid-game without the keyboard going dead.
+	// One device per port, chosen rather than merged. Reading both used to be a
+	// kindness -- plug a pad in and the keyboard kept working -- but it makes two
+	// players ambiguous, and it hid the bug where a port was reading the wrong
+	// pad: the keyboard still worked, so the port looked alive.
 	const Uint8* keys = SDL_GetKeyboardState(nullptr);
-	for (int port = 0; port < 2; port++)
-		out->buttons[port] = static_cast<std::uint8_t>(
-				readKeys(keys, m_config.keys[port]) | readPad(port) | tapped[port]);
+	for (int port = 0; port < 2; port++) {
+		const std::uint8_t held = (m_config.device[port] == nesgui::PORT_GAMEPAD)
+				? readPad(port)
+				: readKeys(keys, m_config.keys[port]);
+		out->buttons[port] = static_cast<std::uint8_t>(held | tapped[port]);
+	}
 
 	// Held, not tapped: fast-forward lasts as long as the key is down.
 	out->turbo = keys[SDL_SCANCODE_TAB] != 0;

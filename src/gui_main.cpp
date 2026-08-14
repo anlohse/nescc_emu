@@ -42,14 +42,17 @@ void usage(const char* argv0) {
 		"  --scale=N      integer window scale, default 3\n"
 		"  --fullscreen   start in borderless fullscreen\n"
 		"  --no-audio     run silent\n"
+		"  --pads         report what SDL sees of the gamepads, then exit\n"
 		"\n"
 		"Player 1: arrows, Z = A, X = B, Enter = Start, Right Shift = Select\n"
 		"Player 2: numpad 8456, Numpad 1 = A, Numpad 2 = B,\n"
 		"          Numpad Enter = Start, Numpad + = Select\n"
 		"\n"
-		"Gamepads are picked up automatically, in the order they are plugged in.\n"
-		"D-pad or left stick to move; A or B = NES A; X or Y = NES B;\n"
-		"Start = Start, Back = Select. The keyboard keeps working alongside.\n"
+		"Each console port reads one device, chosen in Settings > Configure\n"
+		"Controller: the keyboard, or one of the gamepads by name. Nothing is\n"
+		"guessed -- a USB adapter can present a controller per socket whether or\n"
+		"not anything is plugged into it, so \"whichever was found first\" picks the\n"
+		"wrong one. Both ports start on the keyboard.\n"
 		"\n"
 		"All of the above can be rebound in nes.cfg, written beside this program\n"
 		"on the first run. Options given here override it.\n"
@@ -134,6 +137,147 @@ std::string displayName(const std::string& path) {
 	return path.substr(start, end - start);
 }
 
+/**
+ * Report what SDL sees of the attached gamepads, and what the bindings do with
+ * it. For when a pad is detected but nothing reaches the game.
+ *
+ * Both halves matter and they fail differently: SDL not seeing a button at all
+ * means a driver or a missing mapping, while SDL seeing it and nothing happening
+ * means the binding does not name that button.
+ */
+int reportPads(const nesgui::Config& config) {
+	std::printf("SDL %s\n", SDL_GetRevision());
+	std::printf("game controller subsystem: %s, joystick subsystem: %s\n",
+			SDL_WasInit(SDL_INIT_GAMECONTROLLER) ? "up" : "DOWN",
+			SDL_WasInit(SDL_INIT_JOYSTICK) ? "up" : "DOWN");
+	std::printf("joystick events: %d, controller events: %d  (1 = enabled)\n",
+			SDL_JoystickEventState(SDL_QUERY),
+			SDL_GameControllerEventState(SDL_QUERY));
+	std::printf("joysticks seen: %d\n\n", SDL_NumJoysticks());
+
+	// A real window, because on Windows a joystick is only read while the
+	// application has a foreground one. A windowless report can show a working
+	// pad as pressing nothing, which is the fault it is meant to find.
+	SDL_Window* window = SDL_CreateWindow("gamepad report -- press buttons",
+			SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 480, 160,
+			SDL_WINDOW_SHOWN);
+	if (window)
+		SDL_RaiseWindow(window);
+	else
+		std::printf("no window (%s); readings may be unreliable\n", SDL_GetError());
+
+	SDL_GameController* pads[2] = { nullptr, nullptr };
+	int open = 0;
+	for (int i = 0; i < SDL_NumJoysticks(); i++) {
+		std::printf("device %d: \"%s\"\n", i, SDL_JoystickNameForIndex(i));
+		if (!SDL_IsGameController(i)) {
+			// Without a mapping SDL will not present it as a game controller, and
+			// nothing in the emulator will look at it.
+			std::printf("    NOT a game controller: no mapping for this device\n");
+			continue;
+		}
+		if (open < 2 && (pads[open] = SDL_GameControllerOpen(i)) != nullptr) {
+			char* map = SDL_GameControllerMapping(pads[open]);
+			std::printf("    opened as \"%s\"\n", SDL_GameControllerName(pads[open]));
+			std::printf("    mapping: %s\n", map ? map : "(none)");
+			if (map)
+				SDL_free(map);
+
+			// Capabilities, which say whether SDL got at the device at all. A pad
+			// reporting zero buttons has not been read successfully, and no amount
+			// of pressing will ever produce anything -- worth knowing without
+			// needing somebody's thumb.
+			SDL_Joystick* stick = SDL_GameControllerGetJoystick(pads[open]);
+			if (stick)
+				std::printf("    raw: %d buttons, %d axes, %d hats, driver \"%s\"\n",
+						SDL_JoystickNumButtons(stick), SDL_JoystickNumAxes(stick),
+						SDL_JoystickNumHats(stick),
+						SDL_JoystickPathForIndex(i) ? SDL_JoystickPathForIndex(i) : "?");
+			open++;
+		} else {
+			std::printf("    could not open: %s\n", SDL_GetError());
+		}
+	}
+	if (open == 0) {
+		std::printf("\nNothing to poll. SDL is not presenting any device as a "
+				"game controller.\n");
+		return 1;
+	}
+
+	std::printf("\nBindings, port 1:");
+	static const char* const NAMES[8] =
+			{ "a", "b", "select", "start", "up", "down", "left", "right" };
+	for (int i = 0; i < 8; i++) {
+		const char* to = SDL_GameControllerGetStringForButton(config.padButtons[0][i]);
+		std::printf(" %s=%s", NAMES[i], to ? to : "unbound");
+	}
+	std::printf("\n\nPress buttons. Ten seconds, then it stops.\n");
+
+	const Uint32 until = SDL_GetTicks() + 10000;
+	std::string previous;
+	while (SDL_GetTicks() < until) {
+		SDL_Event event;
+		while (SDL_PollEvent(&event)) {
+			// Draining the queue is what keeps the state fresh, exactly as the
+			// game loop does it -- if buttons show up here but not in a game, the
+			// difference is the bindings rather than the plumbing.
+		}
+		SDL_GameControllerUpdate();
+		SDL_JoystickUpdate();
+
+		std::string down;
+		for (int p = 0; p < open; p++) {
+			for (int b = 0; b < SDL_CONTROLLER_BUTTON_MAX; b++)
+				if (SDL_GameControllerGetButton(pads[p],
+						static_cast<SDL_GameControllerButton>(b))) {
+					const char* name = SDL_GameControllerGetStringForButton(
+							static_cast<SDL_GameControllerButton>(b));
+					// Which device answered matters as much as which button: this
+					// adapter presents a socket per HID collection, and SDL does not
+					// promise to enumerate them in the order they are labelled.
+					down += " dev";
+					down += std::to_string(p);
+					down += ":";
+					down += (name ? name : "?");
+				}
+
+			// And the same device underneath, as a plain joystick. These two can
+			// disagree, and which one sees a press says what is wrong: raw buttons
+			// arriving while the controller layer stays silent means the mapping
+			// names the wrong hardware, not that the pad is dead.
+			SDL_Joystick* stick = SDL_GameControllerGetJoystick(pads[p]);
+			if (!stick)
+				continue;
+			for (int b = 0; b < SDL_JoystickNumButtons(stick); b++)
+				if (SDL_JoystickGetButton(stick, b)) {
+					down += " dev";
+					down += std::to_string(p);
+					down += ":raw-b";
+					down += std::to_string(b);
+				}
+			for (int h = 0; h < SDL_JoystickNumHats(stick); h++)
+				if (SDL_JoystickGetHat(stick, h) != SDL_HAT_CENTERED) {
+					down += " dev";
+					down += std::to_string(p);
+					down += ":raw-h";
+					down += std::to_string(SDL_JoystickGetHat(stick, h));
+				}
+		}
+		if (down != previous) {
+			std::printf("pad:%s\n", down.empty() ? " (nothing)" : down.c_str());
+			std::fflush(stdout);
+			previous = down;
+		}
+		SDL_Delay(16);
+	}
+
+	for (int p = 0; p < open; p++)
+		SDL_GameControllerClose(pads[p]);
+	if (window)
+		SDL_DestroyWindow(window);
+	return 0;
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -152,6 +296,7 @@ int main(int argc, char* argv[]) {
 	bool fullscreen = config.fullscreen;
 	bool wantAudio = config.audio;
 	bool settingsOnly = false;
+	bool padsOnly = false;
 
 	for (int i = 1; i < argc; i++) {
 		const char* rest = nullptr;
@@ -167,6 +312,8 @@ int main(int argc, char* argv[]) {
 			fullscreen = true;
 		} else if (std::strcmp(argv[i], "--settings") == 0) {
 			settingsOnly = true;
+		} else if (std::strcmp(argv[i], "--pads") == 0) {
+			padsOnly = true;
 		} else if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
 			usage(argv[0]);
 			return 0;
@@ -234,16 +381,35 @@ int main(int argc, char* argv[]) {
 		console.reset();
 	}
 
-	// Audio and gamepads are both requested but not required: a machine with no
-	// sound device and no pad still gets a working emulator with a keyboard.
-	const Uint32 optional = (wantAudio ? SDL_INIT_AUDIO : 0) | SDL_INIT_GAMECONTROLLER;
-	if (SDL_Init(SDL_INIT_VIDEO | optional) != 0) {
-		if (SDL_Init(SDL_INIT_VIDEO) != 0) {
-			std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
-			return 1;
-		}
+	// Video is required; audio and gamepads are not. Each optional subsystem is
+	// asked for separately, because one SDL_Init with three flags fails as a unit
+	// -- a machine with no sound device was losing its gamepad support too, which
+	// is the sort of thing nobody notices until a pad does not work.
+	// Keep reading the pads even when SDL does not think it has the focus.
+	//
+	// SDL stops polling joysticks while the application is in the background, and
+	// on Windows it only counts *its own* windows. Every dialog here is a native
+	// Win32 one, so the moment the bindings dialog opens, SDL believes the
+	// application is backgrounded and freezes the pad state -- which is why "press
+	// a button on the gamepad" could never capture anything, however long you held
+	// it. The poll ran; the state it read was stale.
+	//
+	// Set before the subsystem starts, because that is when SDL reads it.
+	SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+
+	if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+		std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
+		return 1;
+	}
+	if (wantAudio && SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) {
+		std::fprintf(stderr, "no audio: %s\n", SDL_GetError());
 		wantAudio = false;
 	}
+	if (SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) != 0)
+		std::fprintf(stderr, "no gamepad support: %s\n", SDL_GetError());
+
+	if (padsOnly)
+		return reportPads(config);
 
 	// Everything the front end uses arrives through the plugin boundary, even
 	// the backends still compiled in. Going through the same path the loader

@@ -39,6 +39,7 @@ that keeps the status bar fixed while the level moves beneath it all work.
 | Plugin ABI | C boundary with a version handshake; the SDL backends already go through it |
 | Loadable plugins | `plugins/audio_sdl` is a real shared library; a module shadows the built-in of the same id |
 | Plugin chooser | `F1`, or `--settings` with no ROM: pick a plugin per job and the window size, saved to `nes.cfg` |
+| Controllers | one device per console port, chosen by name — keyboard or a numbered gamepad |
 | Rebinding | the controller plugin's own dialog: press Bind, then press the key or pad button |
 | Plugin settings | each plugin's own dialog — video's scaling style and pixel shape, audio's device, volume and buffer |
 | CRT style | a soft stretch, then a mask multiplied over it — a television's slot mask or a monitor's grille |
@@ -156,14 +157,27 @@ cmake -S . -B build -DNES_BUILD_GUI=OFF
 | A / B | Z / X | numpad 1 / 2 | A or B / X or Y |
 | Start / Select | Enter / Right Shift | numpad Enter / + | Start / Back |
 
-Gamepads are picked up automatically, in the order they are plugged in, and can be
-connected or removed while a game is running. Anything SDL recognises works — an Xbox
-pad, a DualShock, a generic USB pad — because SDL's game-controller layer maps them all
-onto one layout before this code sees them.
+**Each console port reads one device, and you choose which.** Settings > Configure
+Controller asks the two questions in the order a player thinks of them: which player, then
+what they are holding — the keyboard, or a gamepad picked from a list of what is actually
+attached. The choice is saved per port and nothing is inferred from it.
 
-Both face-button diagonals are accepted, because the NES has two buttons and a modern
-pad has four; binding only one pair makes the other half feel broken. The keyboard stays
-live alongside the pad, so picking one up mid-game does not switch the other off.
+That is deliberately less clever than picking up whichever pad appears first, and the
+reason is a real controller. A twin USB adapter presents *one HID collection per socket*,
+so it reports two gamepads whether or not two pads are plugged in — and SDL enumerates them
+in an order that need not match the labels on the shell. On the hardware this was built
+against, the adapter's first socket enumerated second, so "first pad found becomes player
+one" quietly gave player one a socket with nothing in it. No auto-detection can fix that,
+because nothing distinguishes an empty socket from an idle pad. Choosing does.
+
+It also makes two people playing unambiguous: a port set to a gamepad ignores the keyboard,
+so there is no question about who pressed what. Anything SDL recognises works — an Xbox pad,
+a DualShock, a generic USB adapter — because SDL's game-controller layer maps them all onto
+one layout first. Pads can be connected or removed while a game is running; a port whose
+chosen gamepad is absent simply reads nothing, and the dialog still lists it and says so.
+
+Both face-button diagonals are accepted, because the NES has two buttons and a modern pad
+has four; binding only one pair makes the other half feel broken.
 
 ### Configuration
 

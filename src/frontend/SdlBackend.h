@@ -172,7 +172,16 @@ private:
 	nesgui::Config m_owned;
 	const nesgui::Config& m_config;
 	bool m_loadOwn;
-	SDL_GameController* m_pads[2];
+	/**
+	 * Every pad SDL offers, indexed by *gamepad number* and not by console port.
+	 *
+	 * The distinction is the whole fix. These used to be indexed by port, so the
+	 * first pad SDL enumerated became player one -- and a twin adapter enumerates
+	 * a controller per socket whether or not a pad is in it, so the phantom could
+	 * win. Which pad drives which port is now a setting, and this is just the list
+	 * to choose from.
+	 */
+	SDL_GameController* m_pads[nesgui::MAX_GAMEPADS];
 };
 
 /** SDL's performance counter, and SDL_Delay. */

@@ -100,17 +100,45 @@ void BindingModel::restoreDefaults() {
 			m_config.keys[port][i] = defaults.keys[port][i];
 			m_config.padButtons[port][i] = defaults.padButtons[port][i];
 		}
+		// Which device a port reads is part of the defaults too: both on the
+		// keyboard, because that is the one thing certain to be attached.
+		if (m_config.device[port] != defaults.device[port]
+				|| m_config.gamepad[port] != defaults.gamepad[port])
+			m_changed = true;
+		m_config.device[port] = defaults.device[port];
+		m_config.gamepad[port] = defaults.gamepad[port];
 	}
 }
 
+void BindingModel::selectKeyboard(int port) {
+	if (m_config.device[port] == nesgui::PORT_KEYBOARD)
+		return;
+	m_config.device[port] = nesgui::PORT_KEYBOARD;
+	m_changed = true;
+}
+
+void BindingModel::selectGamepad(int port, int gamepad) {
+	if (gamepad < 0 || gamepad >= nesgui::MAX_GAMEPADS)
+		return;
+	if (m_config.device[port] == nesgui::PORT_GAMEPAD
+			&& m_config.gamepad[port] == gamepad)
+		return;
+	m_config.device[port] = nesgui::PORT_GAMEPAD;
+	m_config.gamepad[port] = gamepad;
+	m_changed = true;
+}
+
 void BindingModel::apply(nesgui::Config* config) const {
-	// Bindings only. Window scale, the plugin ids and everything else in the
-	// file belong to somebody else and are not this dialog's to rewrite.
+	// Bindings and the device each port reads. Window scale, the plugin ids and
+	// everything else in the file belong to somebody else and are not this
+	// dialog's to rewrite.
 	for (int port = 0; port < 2; port++) {
 		for (int i = 0; i < BUTTON_COUNT; i++) {
 			config->keys[port][i] = m_config.keys[port][i];
 			config->padButtons[port][i] = m_config.padButtons[port][i];
 		}
+		config->device[port] = m_config.device[port];
+		config->gamepad[port] = m_config.gamepad[port];
 	}
 }
 

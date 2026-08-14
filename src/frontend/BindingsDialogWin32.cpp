@@ -27,7 +27,8 @@ namespace nesfe {
 
 namespace {
 
-const int ID_GROUP     = 1000;
+const int ID_PORT      = 1000;
+const int ID_DEVICE    = 1006;
 const int ID_LIST      = 1001;
 const int ID_BIND      = 1002;
 const int ID_CLEAR     = 1003;
@@ -45,16 +46,32 @@ const int LIST_HEIGHT  = 160;
 
 struct DialogState {
 	BindingModel* model;
-	HWND group;
+	/** Which console port is being configured: the thing a player picks first. */
+	HWND port;
+	/** And what drives it -- the keyboard, or one of the gamepads by name. */
+	HWND device;
 	HWND list;
 	HWND bind;
 	HWND clear;
 	HWND status;
+	int currentPort;
+	/**
+	 * The binding set on show, derived from the port and its device.
+	 *
+	 * Kept rather than recomputed at each use because the two combos can be
+	 * mid-change: the port moves first, and the device list has to be rebuilt for
+	 * it before the group means anything.
+	 */
 	int currentGroup;
 	bool capturing;
 	bool accepted;
-	/** Pads opened by this dialog, so a gamepad can be bound by pressing it. */
-	SDL_GameController* pads[2];
+	/**
+	 * Pads opened by this dialog, so a gamepad can be bound by pressing it.
+	 *
+	 * Indexed by gamepad number, matching the numbering in the device list and in
+	 * the configuration -- not by console port.
+	 */
+	SDL_GameController* pads[nesgui::MAX_GAMEPADS];
 	bool ownsGameController;
 };
 
@@ -138,6 +155,35 @@ namespace {
 /* The window                                                                 */
 /* ------------------------------------------------------------------------- */
 
+/**
+ * Rebuild the device list for the selected port, and select what it reads.
+ *
+ * Entry 0 is the keyboard; after that one entry per gamepad slot, named by SDL
+ * when something is attached to it. Absent slots are listed too, and say so: a
+ * configuration naming Gamepad 3 should still show Gamepad 3 when it is
+ * unplugged, rather than silently becoming something else.
+ */
+void refreshDevices(DialogState* state) {
+	SendMessage(state->device, CB_RESETCONTENT, 0, 0);
+	SendMessageA(state->device, CB_ADDSTRING, 0,
+			reinterpret_cast<LPARAM>("Keyboard"));
+	for (int i = 0; i < nesgui::MAX_GAMEPADS; i++) {
+		char label[160];
+		const char* name = state->pads[i]
+				? SDL_GameControllerName(state->pads[i]) : nullptr;
+		std::snprintf(label, sizeof(label), "Gamepad %d%s%s", i + 1,
+				name ? " -- " : "  (not attached)", name ? name : "");
+		SendMessageA(state->device, CB_ADDSTRING, 0,
+				reinterpret_cast<LPARAM>(label));
+	}
+
+	const int port = state->currentPort;
+	const int row = (state->model->deviceFor(port) == nesgui::PORT_GAMEPAD)
+			? (1 + state->model->gamepadFor(port)) : 0;
+	SendMessage(state->device, CB_SETCURSEL, static_cast<WPARAM>(row), 0);
+	state->currentGroup = state->model->groupFor(port);
+}
+
 void refreshList(DialogState* state) {
 	const int selected = static_cast<int>(
 			SendMessage(state->list, LB_GETCURSEL, 0, 0));
@@ -166,13 +212,13 @@ void openPads(DialogState* state) {
 		state->ownsGameController = true;
 	}
 	int found = 0;
-	for (int i = 0; i < SDL_NumJoysticks() && found < 2; i++)
+	for (int i = 0; i < SDL_NumJoysticks() && found < nesgui::MAX_GAMEPADS; i++)
 		if (SDL_IsGameController(i))
 			state->pads[found++] = SDL_GameControllerOpen(i);
 }
 
 void closePads(DialogState* state) {
-	for (int i = 0; i < 2; i++)
+	for (int i = 0; i < nesgui::MAX_GAMEPADS; i++)
 		if (state->pads[i]) {
 			SDL_GameControllerClose(state->pads[i]);
 			state->pads[i] = nullptr;
@@ -209,6 +255,12 @@ void startCapture(DialogState* state, HWND window) {
 		setStatus(state, "Press a button on the gamepad, or Escape to cancel.");
 		// Pad state is polled rather than delivered: a gamepad does not send
 		// window messages, so nothing would arrive while this dialog has focus.
+		//
+		// And the state it polls is only fresh because the program asks SDL to keep
+		// reading joysticks while it thinks it is in the background. This is a
+		// native window, so SDL believes exactly that the moment it opens -- see
+		// SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS in gui_main.cpp. Without it
+		// this timer runs perfectly and reads a frozen snapshot for ever.
 		SetTimer(window, CAPTURE_TIMER, CAPTURE_INTERVAL, nullptr);
 	} else {
 		setStatus(state, "Press a key, or Escape to cancel.");
@@ -229,6 +281,7 @@ bool pollPadCapture(DialogState* state, HWND window) {
 			if (!SDL_GameControllerGetButton(state->pads[pad],
 					static_cast<SDL_GameControllerButton>(button)))
 				continue;
+			SDL_Log("Bindings dialog: player %d gamepad button %d pressed\n", pad + 1, button);
 			state->model->bindPad(state->currentGroup, row,
 					static_cast<SDL_GameControllerButton>(button));
 			stopCapture(state, window);
@@ -285,10 +338,28 @@ LRESULT CALLBACK bindingsProc(HWND window, UINT message, WPARAM wParam, LPARAM l
 			break;
 		const int id = LOWORD(wParam);
 
-		if (id == ID_GROUP && HIWORD(wParam) == CBN_SELCHANGE) {
+		if (id == ID_PORT && HIWORD(wParam) == CBN_SELCHANGE) {
 			stopCapture(state, window);
-			state->currentGroup = static_cast<int>(
-					SendMessage(state->group, CB_GETCURSEL, 0, 0));
+			state->currentPort = static_cast<int>(
+					SendMessage(state->port, CB_GETCURSEL, 0, 0));
+			// The device list belongs to the port, so it is rebuilt before the
+			// bindings are: which set to show depends on what this port reads.
+			refreshDevices(state);
+			refreshList(state);
+			return 0;
+		}
+		if (id == ID_DEVICE && HIWORD(wParam) == CBN_SELCHANGE) {
+			stopCapture(state, window);
+			const int row = static_cast<int>(
+					SendMessage(state->device, CB_GETCURSEL, 0, 0));
+			// Choosing here is the whole feature: it says what this port reads,
+			// and it is saved. Nothing is inferred from what happens to be plugged
+			// in, so an unattached slot stays chosen and simply reads nothing.
+			if (row <= 0)
+				state->model->selectKeyboard(state->currentPort);
+			else
+				state->model->selectGamepad(state->currentPort, row - 1);
+			state->currentGroup = state->model->groupFor(state->currentPort);
 			refreshList(state);
 			return 0;
 		}
@@ -406,22 +477,34 @@ bool showBindingsDialog(nesgui::Config* config, void* parent) {
 
 	DialogState state;
 	state.model = &model;
+	state.currentPort = 0;
 	state.currentGroup = 0;
 	state.capturing = false;
 	state.accepted = false;
-	state.pads[0] = nullptr;
-	state.pads[1] = nullptr;
+	for (int i = 0; i < nesgui::MAX_GAMEPADS; i++)
+		state.pads[i] = nullptr;
 	state.ownsGameController = false;
 	SetWindowLongPtr(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&state));
 
-	state.group = CreateWindowExA(0, "COMBOBOX", "",
+	// Two questions, in the order a person asks them: which player, then what
+	// they are holding. The port picker is narrow because it only ever says
+	// "Player 1" or "Player 2"; the device list carries controller names.
+	const int portWidth = 130;
+	state.port = CreateWindowExA(0, "COMBOBOX", "",
 			WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
-			MARGIN, MARGIN, CLIENT_WIDTH - 2 * MARGIN, 200,
-			window, reinterpret_cast<HMENU>(ID_GROUP), instance, nullptr);
-	for (int i = 0; i < BindingModel::GROUP_COUNT; i++)
-		SendMessageA(state.group, CB_ADDSTRING, 0,
-				reinterpret_cast<LPARAM>(BindingModel::groupLabel(i)));
-	SendMessage(state.group, CB_SETCURSEL, 0, 0);
+			MARGIN, MARGIN, portWidth, 200,
+			window, reinterpret_cast<HMENU>(ID_PORT), instance, nullptr);
+	SendMessageA(state.port, CB_ADDSTRING, 0,
+			reinterpret_cast<LPARAM>("Player 1"));
+	SendMessageA(state.port, CB_ADDSTRING, 0,
+			reinterpret_cast<LPARAM>("Player 2"));
+	SendMessage(state.port, CB_SETCURSEL, 0, 0);
+
+	state.device = CreateWindowExA(0, "COMBOBOX", "",
+			WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
+			MARGIN + portWidth + 8, MARGIN,
+			CLIENT_WIDTH - 2 * MARGIN - portWidth - 8, 200,
+			window, reinterpret_cast<HMENU>(ID_DEVICE), instance, nullptr);
 
 	state.list = CreateWindowExA(WS_EX_CLIENTEDGE, "LISTBOX", "",
 			WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL
@@ -464,8 +547,11 @@ bool showBindingsDialog(nesgui::Config* config, void* parent) {
 	HFONT mono = listFont();
 	SendMessage(state.list, WM_SETFONT, reinterpret_cast<WPARAM>(mono), TRUE);
 
-	refreshList(&state);
+	// Pads first: the device list names them, so it cannot be built until they
+	// are open.
 	openPads(&state);
+	refreshDevices(&state);
+	refreshList(&state);
 
 	if (parent)
 		EnableWindow(static_cast<HWND>(parent), FALSE);
