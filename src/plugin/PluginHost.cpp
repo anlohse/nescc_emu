@@ -181,6 +181,15 @@ void VideoPlugin::configure() {
 		m_api->configure(m_self);
 }
 
+ApplyResult VideoPlugin::applySettings() {
+	// A plugin built against a header without this field declares a smaller size,
+	// so the check is the same one every other optional call uses -- and the answer
+	// is the honest one: nothing was asked, so nothing was applied.
+	if (!m_self || !provides(m_api, &nes_video_api::apply_settings))
+		return APPLY_UNSUPPORTED;
+	return m_api->apply_settings(m_self) ? APPLY_DONE : APPLY_PARTIAL;
+}
+
 void* VideoPlugin::nativeWindow() const {
 	if (!m_self || !provides(m_api, &nes_video_api::native_window))
 		return nullptr;
@@ -255,6 +264,12 @@ void AudioPlugin::configure() {
 		m_api->configure(m_self);
 }
 
+ApplyResult AudioPlugin::applySettings() {
+	if (!m_self || !provides(m_api, &nes_audio_api::apply_settings))
+		return APPLY_UNSUPPORTED;
+	return m_api->apply_settings(m_self) ? APPLY_DONE : APPLY_PARTIAL;
+}
+
 /* ------------------------------------------------------------------------- */
 /* Input                                                                      */
 /* ------------------------------------------------------------------------- */
@@ -327,6 +342,12 @@ bool InputPlugin::pollZapper(nesfe::ZapperState* out) {
 void InputPlugin::configure() {
 	if (m_self && provides(m_api, &nes_input_api::configure))
 		m_api->configure(m_self);
+}
+
+ApplyResult InputPlugin::applySettings() {
+	if (!m_self || !provides(m_api, &nes_input_api::apply_settings))
+		return APPLY_UNSUPPORTED;
+	return m_api->apply_settings(m_self) ? APPLY_DONE : APPLY_PARTIAL;
 }
 
 } // namespace nesplug

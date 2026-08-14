@@ -49,12 +49,12 @@ inline std::uint8_t multiplier(float fraction) {
 	return clamped(fraction * 255.0f);
 }
 
-/** One channel, curved by CRT_LIFT. 0 and 255 are fixed points. */
-inline std::uint8_t lifted(std::uint32_t channel) {
+/** One channel, curved. 0 and 255 are fixed points whatever the exponent. */
+inline std::uint8_t curved(std::uint32_t channel, float exponent) {
 	if (channel == 0)
 		return 0;
 	const float normal = static_cast<float>(channel) / 255.0f;
-	return clamped(std::pow(normal, CRT_LIFT) * 255.0f);
+	return clamped(std::pow(normal, exponent) * 255.0f);
 }
 
 const float PI = 3.14159265f;
@@ -144,19 +144,19 @@ void buildCrtMask(int width, int height, int sourceLines, CrtMaskKind kind,
 	}
 }
 
-void brightenForCrt(const std::uint32_t* palette, std::uint32_t* out) {
-	// A gamma lift rather than a multiply, and the difference is the whole point.
-	// A multiply runs out of room at the top and clips, which is what turned the
+void gammaPalette(const std::uint32_t* palette, float exponent,
+		std::uint32_t* out) {
+	// A curve rather than a multiply, and the difference is the whole point. A
+	// multiply runs out of room at the top and clips, which is what turned Mario's
 	// sky lavender; a curve through (0,0) and (255,255) has room everywhere in
 	// between and cannot clip anything. It also puts the light where it is
-	// actually missed -- the midtones, which is where a masked picture looks
-	// gloomy -- and leaves black alone.
+	// actually missed -- the midtones -- and leaves black alone.
 	for (int i = 0; i < 64; i++) {
 		const std::uint32_t rgb = palette[i];
 		out[i] = 0xFF000000u
-				| (static_cast<std::uint32_t>(lifted((rgb >> 16) & 0xFF)) << 16)
-				| (static_cast<std::uint32_t>(lifted((rgb >> 8) & 0xFF)) << 8)
-				| static_cast<std::uint32_t>(lifted(rgb & 0xFF));
+				| (static_cast<std::uint32_t>(curved((rgb >> 16) & 0xFF, exponent)) << 16)
+				| (static_cast<std::uint32_t>(curved((rgb >> 8) & 0xFF, exponent)) << 8)
+				| static_cast<std::uint32_t>(curved(rgb & 0xFF, exponent));
 	}
 }
 

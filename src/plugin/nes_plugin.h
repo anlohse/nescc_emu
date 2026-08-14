@@ -193,6 +193,23 @@ typedef struct nes_video_api {
 	 */
 	void (*window_to_frame)(void* self, int window_x, int window_y,
 			int* frame_x, int* frame_y);
+
+	/**
+	 * Re-read the settings and act on them now. May be NULL.
+	 *
+	 * Called after this plugin's own dialog has been accepted. Everything used to
+	 * wait for the next launch, which is a poor answer to pressing OK: a person
+	 * who has just chosen a different picture wants to see a different picture.
+	 *
+	 * A plugin implements as much of this as it can do safely and ignores the
+	 * rest. Some settings genuinely cannot be applied to a running instance --
+	 * the host says so rather than pretending -- and returning without doing
+	 * anything is a valid implementation for a plugin where none of them can.
+	 *
+	 * @return non-zero if everything the dialog changed is now in effect, zero if
+	 *         some of it still needs a restart. The host tells the person which.
+	 */
+	int (*apply_settings)(void* self);
 } nes_video_api;
 
 /* ------------------------------------------------------------------------- */
@@ -223,6 +240,9 @@ typedef struct nes_audio_api {
 	void (*clear)(void* self);
 
 	void (*configure)(void* self);
+
+	/** @see nes_video_api::apply_settings. May be NULL. */
+	int (*apply_settings)(void* self);
 } nes_audio_api;
 
 /* ------------------------------------------------------------------------- */
@@ -278,6 +298,9 @@ typedef struct nes_input_api {
 	 * one need never ask.
 	 */
 	void (*poll_zapper)(void* self, nes_zapper_state* out);
+
+	/** @see nes_video_api::apply_settings. May be NULL. */
+	int (*apply_settings)(void* self);
 } nes_input_api;
 
 /* ------------------------------------------------------------------------- */

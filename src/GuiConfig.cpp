@@ -109,6 +109,15 @@ Config Config::defaults() {
 		c.padButtons[0][i] = pad[i];
 		c.padButtons[1][i] = pad[i];
 	}
+
+	// Both ports on the keyboard to begin with, because the keyboard is the one
+	// device certain to be attached. A pad is chosen deliberately, from a list of
+	// what is actually there, rather than taking a port the moment it is plugged
+	// in and leaving somebody wondering why their keys stopped working.
+	for (int port = 0; port < 2; port++) {
+		c.device[port] = PORT_KEYBOARD;
+		c.gamepad[port] = port;
+	}
 	return c;
 }
 
@@ -213,6 +222,34 @@ bool Config::load(const std::string& file, std::string* warnings) {
 			continue;
 		}
 
+		// Which device drives a port. Its own section rather than a key inside
+		// [keyboard1] or [pad1], because it belongs to neither: it is the choice
+		// *between* them.
+		if (section == "controller1" || section == "controller2") {
+			const int port = (section.back() == '2') ? 1 : 0;
+			if (key == "device") {
+				if (value == "keyboard")
+					device[port] = PORT_KEYBOARD;
+				else if (value == "gamepad")
+					device[port] = PORT_GAMEPAD;
+				else
+					warn(warnings, where + "'" + value
+							+ "' is not 'keyboard' or 'gamepad'");
+			} else if (key == "gamepad") {
+				// Written 1-based, because that is how the dialog and every other
+				// program in the world number them.
+				const int which = std::atoi(value.c_str());
+				if (which < 1 || which > MAX_GAMEPADS)
+					warn(warnings, where + "gamepad must be 1.."
+							+ std::to_string(MAX_GAMEPADS));
+				else
+					gamepad[port] = which - 1;
+			} else {
+				warn(warnings, where + "unknown setting '" + key + "'");
+			}
+			continue;
+		}
+
 		const bool isKeyboard = (section == "keyboard1" || section == "keyboard2");
 		const bool isPad = (section == "pad1" || section == "pad2");
 		if (!isKeyboard && !isPad) {
@@ -282,6 +319,18 @@ bool Config::save(const std::string& file) const {
 	os << "[input]\n"
 	   << "plugin = " << inputPlugin << "\n"
 	   << "\n";
+
+	os << "# What drives each console port. A port reads one device and only that\n"
+	      "# device, so with two people playing there is no doubt about who is\n"
+	      "# pressing what. \"gamepad\" is numbered from 1, in the order the\n"
+	      "# controller dialog lists them.\n";
+	for (int port = 0; port < 2; port++) {
+		os << "[controller" << (port + 1) << "]\n"
+		   << "device = " << (device[port] == PORT_GAMEPAD ? "gamepad" : "keyboard")
+		   << "\n"
+		   << "gamepad = " << (gamepad[port] + 1) << "\n"
+		   << "\n";
+	}
 
 	for (int port = 0; port < 2; port++) {
 		os << "[keyboard" << (port + 1) << "]\n";

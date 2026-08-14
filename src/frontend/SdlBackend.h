@@ -64,6 +64,26 @@ public:
 	 */
 	void configure();
 
+	/**
+	 * Re-read the settings and redraw with them, without a restart.
+	 *
+	 * Everything this plugin offers is renderer state, so all of it can be applied
+	 * to a running window: the filter, the pixel shape, the CRT mask. Window size
+	 * and fullscreen belong to the host and are not here.
+	 */
+	bool applySettings() { return m_renderer ? applyPictureSettings() : true; }
+
+	/**
+	 * How far the gamma control is allowed to go.
+	 *
+	 * Wide enough to be useful on a dim laptop panel or a bright television, and
+	 * bounded because the value comes from a text file somebody may have edited:
+	 * zero would divide, and a huge exponent would post a black or a white screen
+	 * with no way back except finding the file again.
+	 */
+	static const float GAMMA_MIN;
+	static const float GAMMA_MAX;
+
 	/** The NES's pixel aspect on a television: 8:7, not square. */
 	static const int WIDE_WIDTH = 292;   // 256 * 8 / 7
 
@@ -96,6 +116,21 @@ private:
 	SDL_Texture* m_mask;
 	int m_maskWidth;
 	int m_maskHeight;
+
+	/**
+	 * Read the picture settings and act on them, without touching the window.
+	 *
+	 * Called from open() and again whenever the settings dialog is accepted, which
+	 * is what makes a chosen filter visible immediately rather than next launch.
+	 * Only the renderer's logical size, the texture and the palette depend on
+	 * these, so the window keeps its position and its focus.
+	 *
+	 * @return false only if the texture could not be created.
+	 */
+	bool applyPictureSettings();
+
+	/** The gamma from the settings, or 1.0 if what is there makes no sense. */
+	float pictureGamma() const;
 
 	/** Where the picture goes in the window, letterboxed to its aspect. */
 	SDL_Rect pictureRect() const;
@@ -159,6 +194,18 @@ public:
 	 */
 	void configure();
 
+	/**
+	 * Re-read the bindings and the device choice, without a restart.
+	 *
+	 * Only possible for an instance that owns its configuration -- the dialog
+	 * writes to the file, so reloading is how the new bindings arrive. An instance
+	 * reading a configuration somebody else owns cannot reload it and says so, and
+	 * the host reloads its own copy instead.
+	 *
+	 * @return true when this instance has taken the new settings on.
+	 */
+	bool applySettings();
+
 	/** How many pads are currently claimed by the two ports. */
 	int padCount() const;
 
@@ -172,7 +219,16 @@ private:
 	nesgui::Config m_owned;
 	const nesgui::Config& m_config;
 	bool m_loadOwn;
-	SDL_GameController* m_pads[2];
+	/**
+	 * Every pad SDL offers, indexed by *gamepad number* and not by console port.
+	 *
+	 * The distinction is the whole fix. These used to be indexed by port, so the
+	 * first pad SDL enumerated became player one -- and a twin adapter enumerates
+	 * a controller per socket whether or not a pad is in it, so the phantom could
+	 * win. Which pad drives which port is now a setting, and this is just the list
+	 * to choose from.
+	 */
+	SDL_GameController* m_pads[nesgui::MAX_GAMEPADS];
 };
 
 /** SDL's performance counter, and SDL_Delay. */

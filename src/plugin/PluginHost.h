@@ -113,6 +113,20 @@ private:
  */
 bool hasConfigureDialog(const Entry& entry);
 
+/**
+ * What became of an attempt to apply changed settings to a running plugin.
+ *
+ * Three answers rather than two, because "it did not work" and "it cannot be
+ * asked" deserve different words to a person: one is a limit of this plugin, the
+ * other a limit of what any plugin can do to itself while running. The host says
+ * which, instead of leaving somebody to wonder whether pressing OK did anything.
+ */
+enum ApplyResult {
+	APPLY_UNSUPPORTED,   /**< the plugin offers no such call at all */
+	APPLY_PARTIAL,       /**< some of it needs a restart, and the plugin says so */
+	APPLY_DONE           /**< everything the dialog changed is in effect now */
+};
+
 /* ------------------------------------------------------------------------- */
 /* Adapters                                                                   */
 /* ------------------------------------------------------------------------- */
@@ -137,6 +151,9 @@ public:
 
 	/** Show the plugin's own dialog, if it has one. */
 	void configure();
+
+	/** Re-read the settings and act on them now. @see ApplyResult */
+	ApplyResult applySettings();
 
 	/** Native window handle for a dialog to sit over, or null. */
 	void* nativeWindow() const;
@@ -169,6 +186,9 @@ public:
 
 	void configure();
 
+	/** Re-read the settings and act on them now. @see ApplyResult */
+	ApplyResult applySettings();
+
 private:
 	const nes_audio_api* m_api;
 	void* m_self;
@@ -190,6 +210,9 @@ public:
 	bool pollZapper(nesfe::ZapperState* out);
 
 	void configure();
+
+	/** Re-read the settings and act on them now. @see ApplyResult */
+	ApplyResult applySettings();
 
 private:
 	const nes_input_api* m_api;

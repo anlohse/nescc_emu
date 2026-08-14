@@ -47,6 +47,67 @@ TEST_CASE("defaults_are_sane") {
 	CHECK(c.audio);
 }
 
+TEST_CASE("a_port_starts_on_the_keyboard_and_can_be_given_a_named_gamepad") {
+	// Which device drives a port is chosen, not detected, and the choice is what
+	// gets saved. Both ports begin on the keyboard because that is the one device
+	// certain to be attached -- and because a pad silently taking a port is how a
+	// phantom controller from a twin USB adapter stole player one.
+	const Config c = Config::defaults();
+	CHECK_EQ(c.device[0], nesgui::PORT_KEYBOARD);
+	CHECK_EQ(c.device[1], nesgui::PORT_KEYBOARD);
+
+	Config loaded = Config::defaults();
+	std::string warnings;
+	const std::string path = writeTemp(
+			"[controller1]\ndevice = gamepad\ngamepad = 2\n"
+			"[controller2]\ndevice = keyboard\n");
+	REQUIRE(loaded.load(path, &warnings));
+	CHECK_EQ(warnings, "");
+	CHECK_EQ(loaded.device[0], nesgui::PORT_GAMEPAD);
+	// Written 1-based for a person, held 0-based for an array.
+	CHECK_EQ(loaded.gamepad[0], 1);
+	CHECK_EQ(loaded.device[1], nesgui::PORT_KEYBOARD);
+}
+
+TEST_CASE("a_gamepad_number_outside_the_list_is_refused_rather_than_stored") {
+	// A number nothing can be read from would look like a working setting and
+	// behave like a dead controller, which is the failure this whole change exists
+	// to stop happening quietly.
+	Config c = Config::defaults();
+	std::string warnings;
+	const std::string path = writeTemp("[controller1]\ndevice = gamepad\ngamepad = 9\n");
+	REQUIRE(c.load(path, &warnings));
+	CHECK(warnings.find("gamepad must be") != std::string::npos);
+	CHECK_EQ(c.gamepad[0], 0);           // left as it was
+
+	Config bad = Config::defaults();
+	warnings.clear();
+	const std::string other = writeTemp("[controller1]\ndevice = mouse\n");
+	REQUIRE(bad.load(other, &warnings));
+	CHECK(warnings.find("'mouse'") != std::string::npos);
+	CHECK_EQ(bad.device[0], nesgui::PORT_KEYBOARD);
+}
+
+TEST_CASE("the_device_choice_survives_a_save_and_load") {
+	Config c = Config::defaults();
+	c.device[0] = nesgui::PORT_GAMEPAD;
+	c.gamepad[0] = 3;
+	c.device[1] = nesgui::PORT_GAMEPAD;
+	c.gamepad[1] = 0;
+
+	const std::string path = writeTemp("");
+	REQUIRE(c.save(path));
+
+	Config back;
+	std::string warnings;
+	REQUIRE(back.load(path, &warnings));
+	CHECK_EQ(warnings, "");
+	CHECK_EQ(back.device[0], nesgui::PORT_GAMEPAD);
+	CHECK_EQ(back.gamepad[0], 3);
+	CHECK_EQ(back.device[1], nesgui::PORT_GAMEPAD);
+	CHECK_EQ(back.gamepad[1], 0);
+}
+
 TEST_CASE("a_missing_file_leaves_the_defaults_alone") {
 	Config c = Config::defaults();
 	std::string warnings = "untouched";

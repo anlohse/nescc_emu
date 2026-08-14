@@ -22,10 +22,49 @@ namespace nesgui {
  * Inventing a naming scheme would mean maintaining a table that drifts out of
  * step with SDL's, and getting the unusual keys wrong.
  */
+/**
+ * What is plugged into a console port. One thing, chosen, not guessed.
+ *
+ * Named PORT_ rather than the obvious INPUT_ because `INPUT_KEYBOARD` is already
+ * a macro in Windows' own winuser.h, and a macro wins every argument with an
+ * enumerator.
+ */
+enum InputDevice {
+	PORT_KEYBOARD = 0,
+	PORT_GAMEPAD
+};
+
+/**
+ * How many gamepads can be chosen between.
+ *
+ * More than the console has ports on purpose. A single USB adapter can present
+ * several controllers -- the common twin PlayStation adapters present one per
+ * socket whether or not anything is plugged into it -- so the pad somebody wants
+ * is not always among the first two SDL happens to enumerate.
+ */
+const int MAX_GAMEPADS = 4;
+
 struct Config {
 	// Indexed the same way everywhere: A, B, Select, Start, Up, Down, Left, Right.
 	SDL_Scancode keys[2][8];
 	SDL_GameControllerButton padButtons[2][8];
+
+	/**
+	 * Which device drives each console port, and which gamepad if it is a pad.
+	 *
+	 * Chosen rather than detected, and that is the point. Guessing cannot be made
+	 * to work: an adapter presenting two controllers for one physical pad gives no
+	 * way to tell which of them anybody is holding, and "first one enumerated"
+	 * picked the wrong one on the hardware this was built against. Worse, with two
+	 * people playing, a guess that changes between runs is impossible to reason
+	 * about.
+	 *
+	 * So a port reads exactly one device. A port set to a gamepad ignores the
+	 * keyboard, which is what makes two players unambiguous.
+	 */
+	InputDevice device[2];
+	/** 0-based; shown to a person as "Gamepad 1". */
+	int gamepad[2];
 
 	int scale = 3;
 	bool fullscreen = false;

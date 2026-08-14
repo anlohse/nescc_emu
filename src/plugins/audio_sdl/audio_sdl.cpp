@@ -119,6 +119,36 @@ public:
 				static_cast<Uint32>(count * sizeof(float)));
 	}
 
+	/**
+	 * Re-read the settings and act on them now.
+	 *
+	 * Volume is free: it is applied to each sample as it goes out, so reading the
+	 * new value is the whole job. The device and the buffer size are properties of
+	 * an open SDL device and can only change by closing and opening one -- which is
+	 * done here, at the same sample rate, because a person who has just chosen a
+	 * different output expects to hear it from the different output.
+	 *
+	 * @return true when everything was applied.
+	 */
+	bool applySettings() {
+		m_volume = clampVolume(std::atoi(setting("volume", "100").c_str()));
+
+		if (!m_device)
+			return true;    // nothing open: the next open() reads it all anyway
+
+		// Reopening drops whatever was queued, which is a short silence rather
+		// than a click: the queue holds sound that belonged to the old device.
+		const int rate = m_sampleRate;
+		close();
+		char error[256];
+		error[0] = '\0';
+		if (!open(rate, error, sizeof error)) {
+			log(error[0] ? error : "could not reopen the audio device");
+			return false;
+		}
+		return true;
+	}
+
 	/** This plugin's own settings: the device, how loud, and how much latency. */
 	void configure() {
 		if (!nesdlg::fieldsDialogAvailable()) {
@@ -178,7 +208,7 @@ public:
 			parent = m_host->window_handle(m_host->context);
 
 		const bool accepted = nesdlg::showFieldsDialog("SDL2 audio", parent,
-				&fields, "Takes effect the next time the emulator starts.");
+				&fields, "Applied as soon as you press OK; the device is reopened.");
 
 		if (startedHere)
 			SDL_QuitSubSystem(SDL_INIT_AUDIO);
@@ -321,6 +351,14 @@ void audioConfigure(void* self) {
 	} catch (...) { }
 }
 
+int audioApplySettings(void* self) {
+	try {
+		return static_cast<SdlAudioDevice*>(self)->applySettings() ? 1 : 0;
+	} catch (...) {
+		return 0;
+	}
+}
+
 const nes_audio_api AUDIO_API = {
 	sizeof(nes_audio_api),
 	audioCreate,
@@ -331,7 +369,8 @@ const nes_audio_api AUDIO_API = {
 	audioQueue,
 	audioQueuedSeconds,
 	audioClear,
-	audioConfigure
+	audioConfigure,
+	audioApplySettings
 };
 
 const nes_plugin_info AUDIO_INFO = {

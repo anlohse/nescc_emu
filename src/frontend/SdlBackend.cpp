@@ -48,6 +48,26 @@ bool isBound(const SDL_GameControllerButton (&map)[8], SDL_GameControllerButton 
 	return false;
 }
 
+/**
+ * The brightness steps, as the text that goes in the file.
+ *
+ * Text rather than numbers so the dialog's entries and the file's values are the
+ * same strings, and so a hand-edited file matching a step selects it in the
+ * dialog instead of quietly reading as something else.
+ */
+const char* const GAMMA_STEPS[] = {
+	"0.6", "0.7", "0.8", "0.9", "1.0", "1.1", "1.2", "1.4", "1.6", "1.8", "2.2"
+};
+const int GAMMA_STEP_COUNT =
+		static_cast<int>(sizeof(GAMMA_STEPS) / sizeof(GAMMA_STEPS[0]));
+
+/** A gamma as the step text it came from, so the dialog can find it again. */
+std::string gammaText(float gamma) {
+	char buffer[16];
+	std::snprintf(buffer, sizeof buffer, "%.1f", gamma);
+	return buffer;
+}
+
 SDL_JoystickID instanceId(SDL_GameController* pad) {
 	return SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(pad));
 }
@@ -57,6 +77,13 @@ SDL_JoystickID instanceId(SDL_GameController* pad) {
 /* ------------------------------------------------------------------------- */
 /* Video                                                                      */
 /* ------------------------------------------------------------------------- */
+
+// Wide enough for a dim laptop panel at one end and a bright television at the
+// other, and bounded because this comes from a text file: zero would divide, and
+// a huge exponent would post a black or a white screen with no way back except
+// finding the file again.
+const float SdlVideo::GAMMA_MIN = 0.4f;
+const float SdlVideo::GAMMA_MAX = 3.0f;
 
 SdlVideo::SdlVideo(const nes_host* host) :
 		m_host(host), m_window(nullptr), m_renderer(nullptr), m_texture(nullptr),
@@ -100,47 +127,10 @@ bool SdlVideo::open(const VideoOptions& options, Error* error) {
 		return false;
 	}
 
-	// Letterbox at whatever size the window is dragged to. Which aspect that is
-	// is a real choice: the console's pixels were not square on a television,
-	// so a circle drawn in a game is an ellipse at 256x240 and a circle at
-	// 292x240. Sharpness is a choice too -- these are 8x8 tiles, not
-	// photographs, and most people want to see them.
-	const std::string filter = setting("filter", "sharp");
-	m_crt = (filter.rfind("crt", 0) == 0);
-	// A plain "crt" from an older configuration means the television, which is
-	// both the default and what an NES was actually plugged into.
-	m_maskKind = (filter == "crt-monitor")
-			? CRT_APERTURE_GRILLE : CRT_SLOT_MASK;
-	m_logicalWidth = (setting("aspect", "square") == "tv") ? WIDE_WIDTH : m_width;
-
-	// The CRT style letterboxes for itself, because its mask has to land on whole
-	// screen pixels: under a logical size the mask would be scaled along with the
-	// picture, and one-pixel stripes stretched by 3.4 turn into moire.
-	if (!m_crt)
-		SDL_RenderSetLogicalSize(m_renderer, m_logicalWidth, m_height);
-
-	// A television was never sharp -- soft beam, bandwidth-limited signal,
-	// phosphor spreading whatever light it got -- so the CRT style stretches with
-	// a linear filter and multiplies the mask over the result. Blurring first is
-	// what stops it looking like a grid of coloured squares.
-	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY,
-			(filter == "smooth" || m_crt) ? "linear" : "nearest");
-
-	m_texture = SDL_CreateTexture(m_renderer, SDL_PIXELFORMAT_ARGB8888,
-			SDL_TEXTUREACCESS_STREAMING, m_width, m_height);
-	if (!m_texture) {
+	if (!applyPictureSettings()) {
 		if (error) *error = std::string("SDL_CreateTexture: ") + SDL_GetError();
 		close();
 		return false;
-	}
-
-	if (m_crt) {
-		// A multiply cannot add light, so what the mask is about to take has to
-		// be paid in beforehand.
-		std::uint32_t brightened[64];
-		brightenForCrt(m_argbPalette, brightened);
-		for (int i = 0; i < 64; i++)
-			m_argbPalette[i] = brightened[i];
 	}
 
 	// The arrow sits exactly where a light gun is being aimed, which is the one
@@ -164,6 +154,93 @@ void SdlVideo::close() {
 	if (m_texture) { SDL_DestroyTexture(m_texture); m_texture = nullptr; }
 	if (m_renderer) { SDL_DestroyRenderer(m_renderer); m_renderer = nullptr; }
 	if (m_window) { SDL_DestroyWindow(m_window); m_window = nullptr; }
+}
+
+float SdlVideo::pictureGamma() const {
+	// Stored as the text a person would write, so the file stays editable by hand
+	// and the dialog's entries and the file's values are the same strings.
+	const float gamma = static_cast<float>(
+			std::atof(setting("gamma", "1.0").c_str()));
+	// A nonsense value from a hand-edited file must not black the screen out or
+	// divide by zero, and silently ignoring it is kinder than refusing to start.
+	if (!(gamma >= GAMMA_MIN && gamma <= GAMMA_MAX))
+		return 1.0f;
+	return gamma;
+}
+
+bool SdlVideo::applyPictureSettings() {
+	// Everything about how the picture is drawn, in one place so that it can be
+	// done again. Pressing OK in the settings dialog used to change a file and
+	// nothing else, which is a poor answer: somebody who has just chosen a
+	// different picture wants to see a different picture.
+	//
+	// The window is deliberately untouched. Only the renderer's state and the
+	// texture depend on these settings, so there is no reason to destroy a window
+	// -- which would lose its position, flash, and on some platforms lose the
+	// keyboard focus with it.
+	//
+	// Letterbox at whatever size the window is dragged to. Which aspect that is
+	// is a real choice: the console's pixels were not square on a television, so a
+	// circle drawn in a game is an ellipse at 256x240 and a circle at 292x240.
+	// Sharpness is a choice too -- these are 8x8 tiles, not photographs, and most
+	// people want to see them.
+	const std::string filter = setting("filter", "sharp");
+	m_crt = (filter.rfind("crt", 0) == 0);
+	// A plain "crt" from an older configuration means the television, which is
+	// both the default and what an NES was actually plugged into.
+	m_maskKind = (filter == "crt-monitor")
+			? CRT_APERTURE_GRILLE : CRT_SLOT_MASK;
+	m_logicalWidth = (setting("aspect", "square") == "tv") ? WIDE_WIDTH : m_width;
+
+	// The CRT style letterboxes for itself, because its mask has to land on whole
+	// screen pixels: under a logical size the mask would be scaled along with the
+	// picture, and one-pixel stripes stretched by 3.4 turn into moire.
+	//
+	// Zero turns a logical size off again, which matters when switching *away*
+	// from CRT: leaving the old one set would letterbox twice.
+	SDL_RenderSetLogicalSize(m_renderer, m_crt ? 0 : m_logicalWidth,
+			m_crt ? 0 : m_height);
+
+	// A television was never sharp -- soft beam, bandwidth-limited signal,
+	// phosphor spreading whatever light it got -- so the CRT style stretches with
+	// a linear filter and multiplies the mask over the result. Blurring first is
+	// what stops it looking like a grid of coloured squares.
+	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY,
+			(filter == "smooth" || m_crt) ? "linear" : "nearest");
+
+	// The scale-quality hint is read when a texture is created, so the texture has
+	// to be made again for a changed filter to mean anything.
+	if (m_texture)
+		SDL_DestroyTexture(m_texture);
+	m_texture = SDL_CreateTexture(m_renderer, SDL_PIXELFORMAT_ARGB8888,
+			SDL_TEXTUREACCESS_STREAMING, m_width, m_height);
+	if (!m_texture)
+		return false;
+
+	// The mask belongs to the old settings, and is rebuilt on the next frame.
+	if (m_mask) {
+		SDL_DestroyTexture(m_mask);
+		m_mask = nullptr;
+	}
+	m_maskWidth = 0;
+	m_maskHeight = 0;
+
+	// From the console's palette every time rather than from whatever this
+	// currently holds. Lifting an already-lifted palette would brighten it again
+	// on each visit to the dialog, and the drift would look like a bug in the
+	// filter rather than in the bookkeeping.
+	// One curve for both jobs. The CRT mask has to be paid for in advance, because
+	// a multiply can only take light away; brightness is whatever somebody wants
+	// on their own screen. Both are an exponent per channel, and exponents compose
+	// by multiplying, so this is one pass with CRT_LIFT / gamma rather than two
+	// passes and twice the rounding.
+	//
+	// A gamma above 1.0 brightens, which is the direction every other program
+	// means by the word -- so it is the reciprocal of the exponent.
+	const float gamma = pictureGamma();
+	const float exponent = (m_crt ? CRT_LIFT : 1.0f) / gamma;
+	gammaPalette(nes::Ppu::nesPaletteRgb(), exponent, m_argbPalette);
+	return true;
 }
 
 SDL_Rect SdlVideo::pictureRect() const {
@@ -322,7 +399,7 @@ void SdlVideo::configure() {
 		return;
 	}
 
-	std::vector<nesdlg::Field> fields(2);
+	std::vector<nesdlg::Field> fields(3);
 	fields[0].label = "Scaling";
 	fields[0].options.push_back("Sharp  (nearest neighbour)");
 	fields[0].options.push_back("Smooth  (linear)");
@@ -345,6 +422,22 @@ void SdlVideo::configure() {
 	fields[1].options.push_back("As a television showed it  (8:7)");
 	fields[1].selected = (setting("aspect", "square") == "tv") ? 1 : 0;
 
+	// Steps rather than a slider, because this dialog is rows of choices and is
+	// deliberately not a widget toolkit. Steps also mean the value in the file is
+	// one somebody could have typed, and that two machines set to the same
+	// brightness really are.
+	fields[2].label = "Brightness";
+	const std::string current = gammaText(pictureGamma());
+	for (int i = 0; i < GAMMA_STEP_COUNT; i++) {
+		const std::string text = GAMMA_STEPS[i];
+		std::string label = text;
+		if (text == "1.0")
+			label += "  (unchanged)";
+		fields[2].options.push_back(label);
+		if (text == current)
+			fields[2].selected = i;
+	}
+
 	// Parented to the emulator's window when there is one. This dialog is
 	// usually opened from a throwaway instance that has no window of its own,
 	// so the handle has to come from the host rather than from m_window.
@@ -353,13 +446,15 @@ void SdlVideo::configure() {
 		parent = m_host->window_handle(m_host->context);
 
 	if (!nesdlg::showFieldsDialog("SDL2 video", parent, &fields,
-			"Takes effect the next time the emulator starts."))
+			"Applied as soon as you press OK."))
 		return;
 
 	static const char* const FILTERS[] =
 			{ "sharp", "smooth", "crt-tv", "crt-monitor" };
 	putSetting("filter", FILTERS[fields[0].selected & 3]);
 	putSetting("aspect", fields[1].selected == 1 ? "tv" : "square");
+	if (fields[2].selected >= 0 && fields[2].selected < GAMMA_STEP_COUNT)
+		putSetting("gamma", GAMMA_STEPS[fields[2].selected]);
 }
 
 void SdlVideo::setTitle(const char* title) {
@@ -447,14 +542,14 @@ void SdlAudio::clear() {
 
 SdlInput::SdlInput() :
 		m_owned(nesgui::Config::defaults()), m_config(m_owned), m_loadOwn(true) {
-	m_pads[0] = nullptr;
-	m_pads[1] = nullptr;
+	for (int i = 0; i < nesgui::MAX_GAMEPADS; i++)
+		m_pads[i] = nullptr;
 }
 
 SdlInput::SdlInput(const nesgui::Config& config) :
 		m_owned(nesgui::Config::defaults()), m_config(config), m_loadOwn(false) {
-	m_pads[0] = nullptr;
-	m_pads[1] = nullptr;
+	for (int i = 0; i < nesgui::MAX_GAMEPADS; i++)
+		m_pads[i] = nullptr;
 }
 
 SdlInput::~SdlInput() {
@@ -476,42 +571,53 @@ bool SdlInput::open(Error* /*error*/) {
 }
 
 void SdlInput::close() {
-	for (int port = 0; port < 2; port++)
-		if (m_pads[port]) {
-			SDL_GameControllerClose(m_pads[port]);
-			m_pads[port] = nullptr;
+	for (int i = 0; i < nesgui::MAX_GAMEPADS; i++)
+		if (m_pads[i]) {
+			SDL_GameControllerClose(m_pads[i]);
+			m_pads[i] = nullptr;
 		}
 }
 
 void SdlInput::addPad(int deviceIndex) {
 	if (!SDL_IsGameController(deviceIndex))
 		return;
-	for (int port = 0; port < 2; port++) {
-		if (m_pads[port])
+	// Into the first free slot, and that slot number is what a person chooses
+	// between: "Gamepad 1" is this list's first entry, not console port one.
+	// Opening a pad no longer decides anything about who is playing, which is the
+	// point -- an adapter presenting a socket it has nothing plugged into can no
+	// longer take a player's controls with it.
+	for (int i = 0; i < nesgui::MAX_GAMEPADS; i++) {
+		if (m_pads[i])
 			continue;
-		m_pads[port] = SDL_GameControllerOpen(deviceIndex);
-		if (m_pads[port])
-			SDL_Log("gamepad on port %d: %s", port + 1,
-					SDL_GameControllerName(m_pads[port]));
+		m_pads[i] = SDL_GameControllerOpen(deviceIndex);
+		if (m_pads[i])
+			SDL_Log("gamepad %d: %s", i + 1, SDL_GameControllerName(m_pads[i]));
 		return;
 	}
-	// More than two pads: the console only has two ports.
 }
 
 void SdlInput::removePad(SDL_JoystickID id) {
-	for (int port = 0; port < 2; port++) {
-		if (!m_pads[port] || instanceId(m_pads[port]) != id)
+	for (int i = 0; i < nesgui::MAX_GAMEPADS; i++) {
+		if (!m_pads[i] || instanceId(m_pads[i]) != id)
 			continue;
-		SDL_GameControllerClose(m_pads[port]);
-		m_pads[port] = nullptr;
-		SDL_Log("gamepad removed from port %d", port + 1);
+		SDL_GameControllerClose(m_pads[i]);
+		m_pads[i] = nullptr;
+		SDL_Log("gamepad %d removed", i + 1);
 	}
 }
 
 int SdlInput::portOf(SDL_JoystickID id) const {
-	for (int port = 0; port < 2; port++)
-		if (m_pads[port] && instanceId(m_pads[port]) == id)
+	// Which console port, if any, is set to read this device. A pad nobody
+	// selected drives nothing, however hard it is pressed -- which is what makes
+	// two players unambiguous.
+	for (int port = 0; port < 2; port++) {
+		if (m_config.device[port] != nesgui::PORT_GAMEPAD)
+			continue;
+		const int which = m_config.gamepad[port];
+		if (which >= 0 && which < nesgui::MAX_GAMEPADS && m_pads[which]
+				&& instanceId(m_pads[which]) == id)
 			return port;
+	}
 	return -1;
 }
 
@@ -555,12 +661,35 @@ void SdlInput::configure() {
 		m_owned = onDisk;
 }
 
+bool SdlInput::applySettings() {
+	// The dialog writes the file rather than editing this instance, on purpose:
+	// the instance showing it is usually a throwaway. So reloading the file is how
+	// a new binding arrives -- and only an instance that owns its configuration
+	// can do that. One reading somebody else's says no, and the host reloads its
+	// own copy instead, which every reference then sees.
+	if (!m_loadOwn)
+		return false;
+	m_owned.load(nesgui::Config::path());
+	return true;
+}
+
 int SdlInput::padCount() const {
-	return (m_pads[0] ? 1 : 0) + (m_pads[1] ? 1 : 0);
+	int count = 0;
+	for (int i = 0; i < nesgui::MAX_GAMEPADS; i++)
+		if (m_pads[i])
+			count++;
+	return count;
 }
 
 std::uint8_t SdlInput::readPad(int port) const {
-	SDL_GameController* pad = m_pads[port];
+	// The pad this port was told to read, not whichever happened to be found
+	// first. A port set to the keyboard reads no pad at all.
+	if (m_config.device[port] != nesgui::PORT_GAMEPAD)
+		return 0;
+	const int which = m_config.gamepad[port];
+	if (which < 0 || which >= nesgui::MAX_GAMEPADS)
+		return 0;
+	SDL_GameController* pad = m_pads[which];
 	if (!pad)
 		return 0;
 	const SDL_GameControllerButton (&map)[8] = m_config.padButtons[port];
@@ -630,8 +759,12 @@ void SdlInput::poll(InputState* out) {
 			if (port >= 0)
 				tapped[port] |= padButtonFor(event.cbutton.button, port);
 		} else if (event.type == SDL_KEYDOWN && event.key.repeat == 0) {
-			tapped[0] |= buttonForKey(event.key.keysym.scancode, m_config.keys[0]);
-			tapped[1] |= buttonForKey(event.key.keysym.scancode, m_config.keys[1]);
+			// Only for a port actually set to the keyboard, or a tap would reach a
+			// port being driven by a pad.
+			for (int port = 0; port < 2; port++)
+				if (m_config.device[port] == nesgui::PORT_KEYBOARD)
+					tapped[port] |= buttonForKey(event.key.keysym.scancode,
+							m_config.keys[port]);
 			switch (event.key.keysym.scancode) {
 			case SDL_SCANCODE_ESCAPE:  out->commands |= COMMAND_QUIT; break;
 			case SDL_SCANCODE_P:
@@ -646,12 +779,17 @@ void SdlInput::poll(InputState* out) {
 		}
 	}
 
-	// Keyboard and pad both drive the same port, so a pad can be picked up
-	// mid-game without the keyboard going dead.
+	// One device per port, chosen rather than merged. Reading both used to be a
+	// kindness -- plug a pad in and the keyboard kept working -- but it makes two
+	// players ambiguous, and it hid the bug where a port was reading the wrong
+	// pad: the keyboard still worked, so the port looked alive.
 	const Uint8* keys = SDL_GetKeyboardState(nullptr);
-	for (int port = 0; port < 2; port++)
-		out->buttons[port] = static_cast<std::uint8_t>(
-				readKeys(keys, m_config.keys[port]) | readPad(port) | tapped[port]);
+	for (int port = 0; port < 2; port++) {
+		const std::uint8_t held = (m_config.device[port] == nesgui::PORT_GAMEPAD)
+				? readPad(port)
+				: readKeys(keys, m_config.keys[port]);
+		out->buttons[port] = static_cast<std::uint8_t>(held | tapped[port]);
+	}
 
 	// Held, not tapped: fast-forward lasts as long as the key is down.
 	out->turbo = keys[SDL_SCANCODE_TAB] != 0;

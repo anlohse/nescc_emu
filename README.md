@@ -39,6 +39,8 @@ that keeps the status bar fixed while the level moves beneath it all work.
 | Plugin ABI | C boundary with a version handshake; the SDL backends already go through it |
 | Loadable plugins | `plugins/audio_sdl` is a real shared library; a module shadows the built-in of the same id |
 | Plugin chooser | `F1`, or `--settings` with no ROM: pick a plugin per job and the window size, saved to `nes.cfg` |
+| Brightness | a gamma curve on the palette, sharing one pass with the CRT lift |
+| Controllers | one device per console port, chosen by name — keyboard or a numbered gamepad |
 | Rebinding | the controller plugin's own dialog: press Bind, then press the key or pad button |
 | Plugin settings | each plugin's own dialog — video's scaling style and pixel shape, audio's device, volume and buffer |
 | CRT style | a soft stretch, then a mask multiplied over it — a television's slot mask or a monitor's grille |
@@ -156,14 +158,27 @@ cmake -S . -B build -DNES_BUILD_GUI=OFF
 | A / B | Z / X | numpad 1 / 2 | A or B / X or Y |
 | Start / Select | Enter / Right Shift | numpad Enter / + | Start / Back |
 
-Gamepads are picked up automatically, in the order they are plugged in, and can be
-connected or removed while a game is running. Anything SDL recognises works — an Xbox
-pad, a DualShock, a generic USB pad — because SDL's game-controller layer maps them all
-onto one layout before this code sees them.
+**Each console port reads one device, and you choose which.** Settings > Configure
+Controller asks the two questions in the order a player thinks of them: which player, then
+what they are holding — the keyboard, or a gamepad picked from a list of what is actually
+attached. The choice is saved per port and nothing is inferred from it.
 
-Both face-button diagonals are accepted, because the NES has two buttons and a modern
-pad has four; binding only one pair makes the other half feel broken. The keyboard stays
-live alongside the pad, so picking one up mid-game does not switch the other off.
+That is deliberately less clever than picking up whichever pad appears first, and the
+reason is a real controller. A twin USB adapter presents *one HID collection per socket*,
+so it reports two gamepads whether or not two pads are plugged in — and SDL enumerates them
+in an order that need not match the labels on the shell. On the hardware this was built
+against, the adapter's first socket enumerated second, so "first pad found becomes player
+one" quietly gave player one a socket with nothing in it. No auto-detection can fix that,
+because nothing distinguishes an empty socket from an idle pad. Choosing does.
+
+It also makes two people playing unambiguous: a port set to a gamepad ignores the keyboard,
+so there is no question about who pressed what. Anything SDL recognises works — an Xbox pad,
+a DualShock, a generic USB adapter — because SDL's game-controller layer maps them all onto
+one layout first. Pads can be connected or removed while a game is running; a port whose
+chosen gamepad is absent simply reads nothing, and the dialog still lists it and says so.
+
+Both face-button diagonals are accepted, because the NES has two buttons and a modern pad
+has four; binding only one pair makes the other half feel broken.
 
 ### Configuration
 
@@ -301,11 +316,38 @@ Reset and Hard Reset are genuinely different. Reset is the button on the front �
 survives it, and so do A, X and Y. Hard Reset is the switch at the back, and clears them.
 
 `F1` opens the chooser, which also sets the window size, and every plugin's Settings
-button opens that plugin's own dialog: the filter and pixel shape for video, the output
-device, volume and buffer size for audio. All of it takes effect the next time the
-emulator starts — swapping a video plugin or reopening a sound device under a running
-console would mean tearing down the window and the event queue the dialog is itself
-running on.
+button opens that plugin's own dialog: the filter, pixel shape and brightness for video, the
+output device, volume and buffer size for audio, the bindings and chosen device for
+controllers.
+
+**Brightness is a gamma curve, and it shares its arithmetic with the CRT filter.** Both are
+an exponent on each channel, and exponents compose by multiplying — `(x^a)^b` is `x^(ab)` —
+so a CRT picture with the brightness raised is *one* pass with `CRT_LIFT / gamma` rather than
+two passes and twice the rounding. A curve rather than a multiply because a curve through
+(0,0) and (255,255) cannot clip: white stays white, black stays black, and only the midtones
+move. Steps rather than a slider, so the value in the file is one a person could have typed
+and two machines set to the same brightness really are.
+
+It is also the answer to what the mask costs. Measured on Mario's sky, mean luma:
+
+| | gamma 0.6 | gamma 1.0 | gamma 1.8 |
+| --- | --- | --- | --- |
+| Sharp | 108.9 | 150.2 | 188.3 |
+| CRT television | 86.4 | 112.5 | 135.3 |
+
+The CRT row sits below Sharp at every step, because a mask can only take light away — and
+raising the gamma is how to put it back if the picture is darker than you want.
+
+**Those apply the moment you press OK.** A plugin gets an `apply_settings` call after its
+dialog is accepted and does as much as it safely can: video rebuilds its renderer state and
+palette without touching the window, so the window keeps its position and its focus; audio
+reopens the device, because which device and how much latency are properties of an open one;
+controllers reload their bindings. Each answers whether everything took effect, and the host
+says so when something did not, rather than leaving you to wonder whether OK did anything.
+
+**Choosing a different plugin still needs a restart**, and that one is not a shortcut. It
+would mean tearing down the window and the event queue the dialog is itself running on. The
+chooser says as much.
 
 Or press `F1` and open the controller plugin's own dialog, where a binding is set by
 pressing the key or gamepad button you want it on. Anything else in the same group that

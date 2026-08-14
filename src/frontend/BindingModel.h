@@ -61,6 +61,26 @@ public:
 	void clear(int group, int button);
 	void restoreDefaults();
 
+	/**
+	 * Which device a console port reads, and which gamepad if it reads one.
+	 *
+	 * Chosen here rather than detected, so that a port with no pad attached to its
+	 * chosen slot simply reads nothing. That is the honest outcome and it is
+	 * visible in the dialog, where an absent gamepad is still listed and marked as
+	 * absent -- guessing instead is what made a phantom controller from a twin
+	 * adapter steal player one.
+	 */
+	nesgui::InputDevice deviceFor(int port) const { return m_config.device[port]; }
+	int gamepadFor(int port) const { return m_config.gamepad[port]; }
+	void selectKeyboard(int port);
+	void selectGamepad(int port, int gamepad);
+
+	/** The group holding the bindings a port would use as it is configured. */
+	int groupFor(int port) const {
+		return (m_config.device[port] == nesgui::PORT_GAMEPAD)
+				? (PAD_1 + port) : port;
+	}
+
 	bool changed() const { return m_changed; }
 
 	/** Write the bindings into @p config, leaving the rest of it alone. */

@@ -69,6 +69,49 @@ TEST_CASE("the_two_ports_are_separate_controllers") {
 	CHECK_EQ(model.bindingName(BindingModel::KEYBOARD_1, 0), "Z");   // untouched
 }
 
+TEST_CASE("choosing_a_device_for_a_port_selects_which_bindings_it_uses") {
+	// The two axes a player actually thinks in: which player, and what they are
+	// holding. Picking the device also picks the binding set, so the dialog never
+	// has to show "Player 1 gamepad" as a thing separate from "Player 1".
+	nesgui::Config config = nesgui::Config::defaults();
+	BindingModel model(config);
+
+	CHECK_EQ(model.deviceFor(0), nesgui::PORT_KEYBOARD);
+	CHECK_EQ(model.groupFor(0), BindingModel::KEYBOARD_1);
+	CHECK_EQ(model.groupFor(1), BindingModel::KEYBOARD_2);
+
+	model.selectGamepad(0, 1);
+	CHECK_EQ(model.deviceFor(0), nesgui::PORT_GAMEPAD);
+	CHECK_EQ(model.gamepadFor(0), 1);
+	CHECK_EQ(model.groupFor(0), BindingModel::PAD_1);
+	CHECK_EQ(model.groupFor(1), BindingModel::KEYBOARD_2);   // the other port is its own
+
+	model.selectKeyboard(0);
+	CHECK_EQ(model.groupFor(0), BindingModel::KEYBOARD_1);
+}
+
+TEST_CASE("the_chosen_device_is_written_back_with_the_bindings") {
+	nesgui::Config config = nesgui::Config::defaults();
+	BindingModel model(config);
+	model.selectGamepad(1, 2);
+	CHECK(model.changed());
+
+	nesgui::Config out = nesgui::Config::defaults();
+	model.apply(&out);
+	CHECK_EQ(out.device[1], nesgui::PORT_GAMEPAD);
+	CHECK_EQ(out.gamepad[1], 2);
+	// And nothing else in the file is this dialog's to touch.
+	CHECK_EQ(out.scale, config.scale);
+}
+
+TEST_CASE("a_gamepad_number_with_no_slot_is_refused") {
+	nesgui::Config config = nesgui::Config::defaults();
+	BindingModel model(config);
+	model.selectGamepad(0, nesgui::MAX_GAMEPADS);   // one past the end
+	CHECK_EQ(model.deviceFor(0), nesgui::PORT_KEYBOARD);
+	CHECK_FALSE(model.changed());
+}
+
 TEST_CASE("a_pad_binding_cannot_be_set_with_a_key_or_the_other_way_round") {
 	nesgui::Config config = nesgui::Config::defaults();
 	BindingModel model(config);
