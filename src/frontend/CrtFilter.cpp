@@ -1,6 +1,8 @@
 #include "CrtFilter.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstddef>
 
 namespace nesfe {
 
@@ -36,6 +38,15 @@ const float CRT_LIFT = 0.80f;
  * actually did.
  */
 const float CRT_STAGGER = 0.5f;
+
+/*
+ * 1/24, and the derivation is in the header. It is a small number on purpose:
+ * a linear stretch is already most of the blur at these magnifications, and a
+ * quadratic one is only a little softer than it. Anything larger would be a
+ * blurrier picture rather than a rounder one, which is a different setting from
+ * the one being asked for here.
+ */
+const float CRT_SOFTEN = 1.0f / 24.0f;
 
 namespace {
 
@@ -81,46 +92,133 @@ inline float beamLevel(float from, float to) {
 	return CRT_SCANLINE + (1.0f - CRT_SCANLINE) * beam;
 }
 
+/**
+ * How much of one channel survives in output pixel @p col of a triad.
+ *
+ * The stripes are continuous and the pixels are not, so this integrates the one
+ * over the other instead of handing each pixel a stripe. At a pitch of three the
+ * two come to the same thing -- one pixel, one stripe -- which is why it was
+ * never needed while three was the only pitch. At a pitch of two it is the whole
+ * difference: three stripes have to share two pixels, so every pixel straddles a
+ * boundary. Written out by hand that came to red and blue getting a stripe each
+ * and green getting half of one twice, which is a fifth less green than red, and
+ * a mask that is not achromatic in total does not dim a picture -- it tints it.
+ * That is where the violet came from.
+ *
+ * Integrating cannot get that wrong, because every stripe is the same width: the
+ * three channels sum to the same thing over a triad at any pitch, and to the same
+ * *mean* too, so changing the pitch changes how fine the mask is and not how
+ * bright or what colour.
+ */
+inline float stripeLevel(int channel, int col, int pitch) {
+	// Measured in stripe widths, of which a triad has three and spans pitch pixels.
+	const float from = static_cast<float>(col) * 3.0f / pitch;
+	const float to = static_cast<float>(col + 1) * 3.0f / pitch;
+	const float mineFrom = std::max(from, static_cast<float>(channel));
+	const float mineTo = std::min(to, static_cast<float>(channel + 1));
+	const float mine = (mineTo > mineFrom) ? mineTo - mineFrom : 0.0f;
+	const float elsewhere = (to - from) - mine;
+	return (mine + elsewhere * (1.0f - CRT_STRIPE)) / (to - from);
+}
+
 } // namespace
 
-float getAlterLevel(int row) {
-	switch (row) {
-	case 0: return 0.66f;
-	case 1: return 0.66f;
-	}
-	return 1.0f;
-}
-float getNormalLevel(int row) {
-	switch (row) {
-	case 2: return 0.5f;
-	}
-	return 1.0f;
+int crtMaskPitch(CrtMaskKind kind) {
+	return (kind == CRT_APERTURE_GRILLE_2 || kind == CRT_SLOT_MASK_2)
+			? CRT_FINE_PITCH : CRT_MASK_PITCH;
 }
 
 void buildCrtMask(int width, int height, int sourceLines, CrtMaskKind kind,
 		std::uint32_t* out) {
+	if (width <= 0 || height <= 0)
+		return;
+
+	const int pitch = crtMaskPitch(kind);
+	const bool staggered = (kind == CRT_SLOT_MASK || kind == CRT_SLOT_MASK_2);
+
+	// The two axes come from different places, and keeping them apart is what makes
+	// this work at any window size. The pitch is horizontal and is measured in
+	// screen pixels, because the stripes were in the glass. The beam is vertical
+	// and is measured in console lines, because the gaps were in the signal -- so
+	// it is divided by however many rows the window gives each of the 240 lines,
+	// whether that is a whole number or 2.63.
+	const float linesPerRow =
+			static_cast<float>(sourceLines) / static_cast<float>(height);
 
 	for (int y = 0; y < height; y++) {
-
-		int row = y % 3;
+		const float rowTop = y * linesPerRow;
+		const float rowBottom = rowTop + linesPerRow;
+		const float aligned = beamLevel(rowTop, rowBottom);
+		// Half a line down for every other triad column, which is the slot mask's
+		// brick bond. It costs nothing: the beam integral takes a position rather
+		// than a row index, so an offset one is the same call.
+		const float offset = staggered
+				? beamLevel(rowTop + CRT_STAGGER, rowBottom + CRT_STAGGER)
+				: aligned;
 
 		for (int x = 0; x < width; x++) {
-			const int col = (x % CRT_MASK_PITCH);
-			const bool alterCol = (x / CRT_MASK_PITCH) % 2 == 1 && kind == CRT_SLOT_MASK;
-		
-			const float lineLevel = alterCol 
-				? getAlterLevel(row)
-				: getNormalLevel(row);
-				
-			const float r = (col == 0 ? 1.0f : 0.66f) * lineLevel;
-			const float g = (col == 1 ? 1.0f : 0.66f) * lineLevel;
-			const float b = (col == 2 ? 1.0f : 0.66f) * lineLevel;
+			const int col = x % pitch;
+			const float lineLevel = ((x / pitch) % 2 == 1) ? offset : aligned;
 
-			out[y * width + x] = 0xFF000000u
+			const float r = stripeLevel(0, col, pitch) * lineLevel;
+			const float g = stripeLevel(1, col, pitch) * lineLevel;
+			const float b = stripeLevel(2, col, pitch) * lineLevel;
+
+			out[static_cast<std::size_t>(y) * width + x] = 0xFF000000u
 					| (static_cast<std::uint32_t>(multiplier(r)) << 16)
 					| (static_cast<std::uint32_t>(multiplier(g)) << 8)
 					| static_cast<std::uint32_t>(multiplier(b));
 		}
+	}
+}
+
+namespace {
+
+/** Fixed point, so the same picture gives the same bytes on every machine. */
+const int SOFTEN_ONE = 4096;
+const int SOFTEN_SIDE = static_cast<int>(CRT_SOFTEN * SOFTEN_ONE + 0.5f);
+const int SOFTEN_MIDDLE = SOFTEN_ONE - 2 * SOFTEN_SIDE;
+
+/** Three samples through the kernel, a channel at a time. */
+inline std::uint32_t softened(std::uint32_t before, std::uint32_t here,
+		std::uint32_t after) {
+	std::uint32_t result = 0xFF000000u;
+	for (int shift = 0; shift <= 16; shift += 8) {
+		const int value = (static_cast<int>((before >> shift) & 0xFF) * SOFTEN_SIDE
+				+ static_cast<int>((here >> shift) & 0xFF) * SOFTEN_MIDDLE
+				+ static_cast<int>((after >> shift) & 0xFF) * SOFTEN_SIDE
+				+ SOFTEN_ONE / 2) / SOFTEN_ONE;
+		result |= static_cast<std::uint32_t>(value) << shift;
+	}
+	return result;
+}
+
+} // namespace
+
+void softenPicture(const std::uint32_t* picture, int width, int height,
+		std::uint32_t* scratch, std::uint32_t* out) {
+	if (width <= 0 || height <= 0)
+		return;
+
+	// Separable, so it is three taps across and three down rather than nine of
+	// them -- and both passes run over 256x240 samples, not over a window.
+	for (int y = 0; y < height; y++) {
+		const std::uint32_t* row = picture + static_cast<std::size_t>(y) * width;
+		std::uint32_t* to = scratch + static_cast<std::size_t>(y) * width;
+		for (int x = 0; x < width; x++)
+			to[x] = softened(row[x > 0 ? x - 1 : 0], row[x],
+					row[x + 1 < width ? x + 1 : width - 1]);
+	}
+
+	for (int y = 0; y < height; y++) {
+		const std::size_t above = static_cast<std::size_t>(y > 0 ? y - 1 : 0) * width;
+		const std::size_t here = static_cast<std::size_t>(y) * width;
+		const std::size_t below =
+				static_cast<std::size_t>(y + 1 < height ? y + 1 : height - 1) * width;
+		std::uint32_t* to = out + here;
+		for (int x = 0; x < width; x++)
+			to[x] = softened(scratch[above + x], scratch[here + x],
+					scratch[below + x]);
 	}
 }
 
