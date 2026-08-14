@@ -39,6 +39,7 @@ that keeps the status bar fixed while the level moves beneath it all work.
 | Plugin ABI | C boundary with a version handshake; the SDL backends already go through it |
 | Loadable plugins | `plugins/audio_sdl` is a real shared library; a module shadows the built-in of the same id |
 | Plugin chooser | `F1`, or `--settings` with no ROM: pick a plugin per job and the window size, saved to `nes.cfg` |
+| Brightness | a gamma curve on the palette, sharing one pass with the CRT lift |
 | Controllers | one device per console port, chosen by name — keyboard or a numbered gamepad |
 | Rebinding | the controller plugin's own dialog: press Bind, then press the key or pad button |
 | Plugin settings | each plugin's own dialog — video's scaling style and pixel shape, audio's device, volume and buffer |
@@ -315,8 +316,27 @@ Reset and Hard Reset are genuinely different. Reset is the button on the front �
 survives it, and so do A, X and Y. Hard Reset is the switch at the back, and clears them.
 
 `F1` opens the chooser, which also sets the window size, and every plugin's Settings
-button opens that plugin's own dialog: the filter and pixel shape for video, the output
-device, volume and buffer size for audio, the bindings and chosen device for controllers.
+button opens that plugin's own dialog: the filter, pixel shape and brightness for video, the
+output device, volume and buffer size for audio, the bindings and chosen device for
+controllers.
+
+**Brightness is a gamma curve, and it shares its arithmetic with the CRT filter.** Both are
+an exponent on each channel, and exponents compose by multiplying — `(x^a)^b` is `x^(ab)` —
+so a CRT picture with the brightness raised is *one* pass with `CRT_LIFT / gamma` rather than
+two passes and twice the rounding. A curve rather than a multiply because a curve through
+(0,0) and (255,255) cannot clip: white stays white, black stays black, and only the midtones
+move. Steps rather than a slider, so the value in the file is one a person could have typed
+and two machines set to the same brightness really are.
+
+It is also the answer to what the mask costs. Measured on Mario's sky, mean luma:
+
+| | gamma 0.6 | gamma 1.0 | gamma 1.8 |
+| --- | --- | --- | --- |
+| Sharp | 108.9 | 150.2 | 188.3 |
+| CRT television | 86.4 | 112.5 | 135.3 |
+
+The CRT row sits below Sharp at every step, because a mask can only take light away — and
+raising the gamma is how to put it back if the picture is darker than you want.
 
 **Those apply the moment you press OK.** A plugin gets an `apply_settings` call after its
 dialog is accepted and does as much as it safely can: video rebuilds its renderer state and

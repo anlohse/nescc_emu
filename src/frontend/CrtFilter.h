@@ -105,12 +105,24 @@ void buildCrtMask(int width, int height, int sourceLines, CrtMaskKind kind,
 		std::uint32_t* out);
 
 /**
- * The console palette, lifted by CRT_LIFT, for use with the mask.
+ * The console palette through a gamma curve.
  *
- * @param palette  64 entries of 0xAARRGGBB
- * @param out      64 entries, clamped
+ * One function for two jobs, because they are the same arithmetic: the lift the
+ * mask needs paying for, and whatever brightness somebody actually wants. Both
+ * are an exponent on each channel, and exponents compose by multiplying --
+ * (x^a)^b is x^(ab) -- so a CRT picture with the brightness turned up is one
+ * pass with CRT_LIFT / gamma, not two passes and twice the rounding.
+ *
+ * Below 1.0 brightens. Nothing clips, because a curve through (0,0) and
+ * (255,255) has room everywhere between them; that is why this is a curve and
+ * not a multiply.
+ *
+ * @param palette   64 entries of 0xAARRGGBB
+ * @param exponent  1.0 leaves the palette alone
+ * @param out       64 entries, opaque
  */
-void brightenForCrt(const std::uint32_t* palette, std::uint32_t* out);
+void gammaPalette(const std::uint32_t* palette, float exponent,
+		std::uint32_t* out);
 
 } // namespace nesfe
 

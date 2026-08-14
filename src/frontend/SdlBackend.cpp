@@ -48,6 +48,26 @@ bool isBound(const SDL_GameControllerButton (&map)[8], SDL_GameControllerButton 
 	return false;
 }
 
+/**
+ * The brightness steps, as the text that goes in the file.
+ *
+ * Text rather than numbers so the dialog's entries and the file's values are the
+ * same strings, and so a hand-edited file matching a step selects it in the
+ * dialog instead of quietly reading as something else.
+ */
+const char* const GAMMA_STEPS[] = {
+	"0.6", "0.7", "0.8", "0.9", "1.0", "1.1", "1.2", "1.4", "1.6", "1.8", "2.2"
+};
+const int GAMMA_STEP_COUNT =
+		static_cast<int>(sizeof(GAMMA_STEPS) / sizeof(GAMMA_STEPS[0]));
+
+/** A gamma as the step text it came from, so the dialog can find it again. */
+std::string gammaText(float gamma) {
+	char buffer[16];
+	std::snprintf(buffer, sizeof buffer, "%.1f", gamma);
+	return buffer;
+}
+
 SDL_JoystickID instanceId(SDL_GameController* pad) {
 	return SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(pad));
 }
@@ -57,6 +77,13 @@ SDL_JoystickID instanceId(SDL_GameController* pad) {
 /* ------------------------------------------------------------------------- */
 /* Video                                                                      */
 /* ------------------------------------------------------------------------- */
+
+// Wide enough for a dim laptop panel at one end and a bright television at the
+// other, and bounded because this comes from a text file: zero would divide, and
+// a huge exponent would post a black or a white screen with no way back except
+// finding the file again.
+const float SdlVideo::GAMMA_MIN = 0.4f;
+const float SdlVideo::GAMMA_MAX = 3.0f;
 
 SdlVideo::SdlVideo(const nes_host* host) :
 		m_host(host), m_window(nullptr), m_renderer(nullptr), m_texture(nullptr),
@@ -129,6 +156,18 @@ void SdlVideo::close() {
 	if (m_window) { SDL_DestroyWindow(m_window); m_window = nullptr; }
 }
 
+float SdlVideo::pictureGamma() const {
+	// Stored as the text a person would write, so the file stays editable by hand
+	// and the dialog's entries and the file's values are the same strings.
+	const float gamma = static_cast<float>(
+			std::atof(setting("gamma", "1.0").c_str()));
+	// A nonsense value from a hand-edited file must not black the screen out or
+	// divide by zero, and silently ignoring it is kinder than refusing to start.
+	if (!(gamma >= GAMMA_MIN && gamma <= GAMMA_MAX))
+		return 1.0f;
+	return gamma;
+}
+
 bool SdlVideo::applyPictureSettings() {
 	// Everything about how the picture is drawn, in one place so that it can be
 	// done again. Pressing OK in the settings dialog used to change a file and
@@ -190,15 +229,17 @@ bool SdlVideo::applyPictureSettings() {
 	// currently holds. Lifting an already-lifted palette would brighten it again
 	// on each visit to the dialog, and the drift would look like a bug in the
 	// filter rather than in the bookkeeping.
-	// The console's palette carries no alpha, so an opaque one is added here.
-	// brightenForCrt sets its own.
-	const std::uint32_t* base = nes::Ppu::nesPaletteRgb();
-	if (m_crt) {
-		brightenForCrt(base, m_argbPalette);
-	} else {
-		for (int i = 0; i < 64; i++)
-			m_argbPalette[i] = 0xFF000000u | base[i];
-	}
+	// One curve for both jobs. The CRT mask has to be paid for in advance, because
+	// a multiply can only take light away; brightness is whatever somebody wants
+	// on their own screen. Both are an exponent per channel, and exponents compose
+	// by multiplying, so this is one pass with CRT_LIFT / gamma rather than two
+	// passes and twice the rounding.
+	//
+	// A gamma above 1.0 brightens, which is the direction every other program
+	// means by the word -- so it is the reciprocal of the exponent.
+	const float gamma = pictureGamma();
+	const float exponent = (m_crt ? CRT_LIFT : 1.0f) / gamma;
+	gammaPalette(nes::Ppu::nesPaletteRgb(), exponent, m_argbPalette);
 	return true;
 }
 
@@ -358,7 +399,7 @@ void SdlVideo::configure() {
 		return;
 	}
 
-	std::vector<nesdlg::Field> fields(2);
+	std::vector<nesdlg::Field> fields(3);
 	fields[0].label = "Scaling";
 	fields[0].options.push_back("Sharp  (nearest neighbour)");
 	fields[0].options.push_back("Smooth  (linear)");
@@ -381,6 +422,22 @@ void SdlVideo::configure() {
 	fields[1].options.push_back("As a television showed it  (8:7)");
 	fields[1].selected = (setting("aspect", "square") == "tv") ? 1 : 0;
 
+	// Steps rather than a slider, because this dialog is rows of choices and is
+	// deliberately not a widget toolkit. Steps also mean the value in the file is
+	// one somebody could have typed, and that two machines set to the same
+	// brightness really are.
+	fields[2].label = "Brightness";
+	const std::string current = gammaText(pictureGamma());
+	for (int i = 0; i < GAMMA_STEP_COUNT; i++) {
+		const std::string text = GAMMA_STEPS[i];
+		std::string label = text;
+		if (text == "1.0")
+			label += "  (unchanged)";
+		fields[2].options.push_back(label);
+		if (text == current)
+			fields[2].selected = i;
+	}
+
 	// Parented to the emulator's window when there is one. This dialog is
 	// usually opened from a throwaway instance that has no window of its own,
 	// so the handle has to come from the host rather than from m_window.
@@ -396,6 +453,8 @@ void SdlVideo::configure() {
 			{ "sharp", "smooth", "crt-tv", "crt-monitor" };
 	putSetting("filter", FILTERS[fields[0].selected & 3]);
 	putSetting("aspect", fields[1].selected == 1 ? "tv" : "square");
+	if (fields[2].selected >= 0 && fields[2].selected < GAMMA_STEP_COUNT)
+		putSetting("gamma", GAMMA_STEPS[fields[2].selected]);
 }
 
 void SdlVideo::setTitle(const char* title) {

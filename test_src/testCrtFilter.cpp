@@ -20,6 +20,7 @@
 #include <doctest/doctest.h>
 
 #include <cstdint>
+#include <cstdlib>
 #include <vector>
 
 using namespace nesfe;
@@ -276,7 +277,7 @@ namespace {
 void throughFilter(std::uint32_t colour, double* r, double* g, double* b) {
 	const std::uint32_t one[64] = { colour };
 	std::uint32_t lifted[64];
-	brightenForCrt(one, lifted);
+	gammaPalette(one, CRT_LIFT, lifted);
 
 	// A 3x3 patch of mask is one console pixel's worth at 3x. Averaging it is
 	// what an eye does at a normal viewing distance.
@@ -347,20 +348,75 @@ TEST_CASE("the_filter_dims_the_picture_without_gutting_it") {
 	CHECK(filtered < plain * 0.95);
 }
 
+TEST_CASE("a_gamma_of_one_changes_nothing_and_the_directions_are_the_right_way_round") {
+	// The identity matters because it is the default: somebody who has not touched
+	// the brightness control must get exactly the palette the console has.
+	std::uint32_t out[64];
+	const std::uint32_t* base = nes::Ppu::nesPaletteRgb();
+	gammaPalette(base, 1.0f, out);
+	for (int i = 0; i < 64; i++) {
+		CAPTURE(i);
+		CHECK_EQ(out[i], 0xFF000000u | base[i]);
+	}
+
+	// And which way is up. An exponent below 1.0 brightens -- the dialog shows the
+	// reciprocal, because "gamma 2.0" meaning "darker" would surprise everybody.
+	std::uint32_t brighter[64];
+	std::uint32_t darker[64];
+	gammaPalette(base, 0.5f, brighter);
+	gammaPalette(base, 2.0f, darker);
+	int brighterWins = 0;
+	int darkerWins = 0;
+	for (int i = 0; i < 64; i++) {
+		if (luma(brighter[i]) > luma(base[i] | 0xFF000000u))
+			brighterWins++;
+		if (luma(darker[i]) < luma(base[i] | 0xFF000000u))
+			darkerWins++;
+	}
+	// Not all 64: black and white are fixed points under any exponent.
+	CHECK(brighterWins > 50);
+	CHECK(darkerWins > 50);
+}
+
+TEST_CASE("composing_two_gammas_is_one_gamma_of_their_product") {
+	// The reason the CRT lift and the brightness control are a single pass. Applying
+	// one curve and then another is the same as applying one curve whose exponent is
+	// the product, so the emulator multiplies CRT_LIFT by 1/gamma and curves once --
+	// half the work and half the rounding.
+	//
+	// Checked to within a step, because each pass rounds to a byte and two passes
+	// round twice; that difference is exactly what doing it once avoids.
+	const std::uint32_t* base = nes::Ppu::nesPaletteRgb();
+	std::uint32_t once[64];
+	std::uint32_t twice[64];
+	std::uint32_t middle[64];
+
+	gammaPalette(base, 0.8f * 0.5f, once);
+	gammaPalette(base, 0.8f, middle);
+	gammaPalette(middle, 0.5f, twice);
+
+	for (int i = 0; i < 64; i++) {
+		CAPTURE(i);
+		CHECK(std::abs(red(once[i]) - red(twice[i])) <= 2);
+		CHECK(std::abs(green(once[i]) - green(twice[i])) <= 2);
+		CHECK(std::abs(blue(once[i]) - blue(twice[i])) <= 2);
+	}
+}
+
 TEST_CASE("the_lift_cannot_clip_and_leaves_the_ends_alone") {
 	// The reason it is a curve and not a multiply. White is already at full: a
 	// multiply would have to clip it, and clipping is what breaks a hue. A curve
 	// through both ends has nothing to clip.
 	const std::uint32_t white[64] = { 0xFFFFFFFFu };
 	std::uint32_t out[64];
-	brightenForCrt(white, out);
+	gammaPalette(white, CRT_LIFT, out);
 	CHECK_EQ(red(out[0]), 255);
 	CHECK_EQ(green(out[0]), 255);
 	CHECK_EQ(blue(out[0]), 255);
 
 	// Black stays black, or every dark scene turns grey.
 	const std::uint32_t black[64] = { 0xFF000000u };
-	brightenForCrt(black, out);
+	gammaPalette(black, CRT_LIFT, out);
 	CHECK_EQ(out[0] & 0x00FFFFFFu, 0u);
 
 	// In between it brightens, monotonically. A curve that crossed itself would
@@ -370,7 +426,7 @@ TEST_CASE("the_lift_cannot_clip_and_leaves_the_ends_alone") {
 		const std::uint32_t v = static_cast<std::uint32_t>(i * 4);
 		ramp[i] = 0xFF000000u | (v << 16) | (v << 8) | v;
 	}
-	brightenForCrt(ramp, out);
+	gammaPalette(ramp, CRT_LIFT, out);
 	for (int i = 1; i < 64; i++) {
 		CAPTURE(i);
 		CHECK(red(out[i]) >= red(out[i - 1]));

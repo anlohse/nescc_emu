@@ -73,6 +73,17 @@ public:
 	 */
 	bool applySettings() { return m_renderer ? applyPictureSettings() : true; }
 
+	/**
+	 * How far the gamma control is allowed to go.
+	 *
+	 * Wide enough to be useful on a dim laptop panel or a bright television, and
+	 * bounded because the value comes from a text file somebody may have edited:
+	 * zero would divide, and a huge exponent would post a black or a white screen
+	 * with no way back except finding the file again.
+	 */
+	static const float GAMMA_MIN;
+	static const float GAMMA_MAX;
+
 	/** The NES's pixel aspect on a television: 8:7, not square. */
 	static const int WIDE_WIDTH = 292;   // 256 * 8 / 7
 
@@ -117,6 +128,9 @@ private:
 	 * @return false only if the texture could not be created.
 	 */
 	bool applyPictureSettings();
+
+	/** The gamma from the settings, or 1.0 if what is there makes no sense. */
+	float pictureGamma() const;
 
 	/** Where the picture goes in the window, letterboxed to its aspect. */
 	SDL_Rect pictureRect() const;
