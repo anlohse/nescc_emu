@@ -43,7 +43,7 @@ that keeps the status bar fixed while the level moves beneath it all work.
 | Controllers | one device per console port, chosen by name — keyboard or a numbered gamepad |
 | Rebinding | the controller plugin's own dialog: press Bind, then press the key or pad button |
 | Plugin settings | each plugin's own dialog — video's scaling style and pixel shape, audio's device, volume and buffer |
-| CRT style | a soft stretch, then a mask multiplied over it — a television's slot mask or a monitor's grille |
+| CRT style | a quadratic stretch, then a mask multiplied over it — a television's slot mask or a monitor's grille, at either of two pitches |
 | Menu bar | native, on Windows: Emulation, State, Settings, Help — every item implemented |
 | Loading ROMs | from the menu or the command line; the window opens empty without one, and remembers the last eight |
 | Save states | eight slots beside the ROM, with the whole machine in them: RAM, both chips, the cartridge's registers, and where the beam is |
@@ -242,11 +242,11 @@ plugin owning its window: the alternative was an ABI call obliging every video p
 ever written to host a menu. And the window grows by exactly the menu's height, so the
 picture keeps the size that was asked for instead of losing a strip to it.
 
-**Scaling** offers Sharp, Smooth, **CRT television** and **CRT monitor**. The CRT styles do
-two separate things in the order a television did them. First they stretch the picture with
-a linear filter, because nothing about a television was sharp — the beam was a spot with
-soft edges, the signal was bandwidth-limited, and the phosphor spread whatever light it got.
-Then they multiply a mask over the result:
+**Scaling** offers Sharp, Smooth, and **CRT television** and **CRT monitor** each at two
+pitches. The CRT styles do two separate things in the order a television did them. First
+they stretch the picture soft, because nothing about a television was sharp — the beam was a
+spot with soft edges, the signal was bandwidth-limited, and the phosphor spread whatever
+light it got. Then they multiply a mask over the result:
 
 ```
 [R  G  B ]
@@ -291,6 +291,42 @@ aligned one — measured on screen, the two masks come out at 112.4 and 112.5 av
 It also *reduces* the horizontal banding rather than adding any: alternating gaps break up
 the continuous dark rows a grille has, measuring 0.991 row-to-row uniformity against the
 grille's 0.968.
+
+**Both come at two pitches**, which is a second and independent choice: how many screen
+pixels one red-green-blue triad spans. Three is one pixel per phosphor, the coarse and
+obvious mask. Two is a finer glass — the same three phosphors in two pixels — and every
+screen pixel then straddles a stripe boundary instead of sitting inside one.
+
+That is exactly where a mask goes wrong. Write the coverage out by hand and the obvious
+table gives red and blue a whole stripe each and green two halves, which is a fifth less
+green than red; a mask short of one channel does not dim a picture, it *tints* it, and the
+tint of missing green is violet. So coverage is integrated rather than tabulated: the
+continuous stripes are integrated over each screen pixel, which cannot favour a channel
+because the three stripes are the same width. Both pitches then fall out of one expression,
+and measured on Mario's sky the four styles agree to a fifth of a level in every channel —
+109.1, 102.3, 173.3 at a pitch of three against 109.1, 102.5, 173.1 at two. Changing the
+pitch changes how fine the mask looks and nothing else.
+
+**The stretch is quadratic, not linear**, and it costs almost nothing because of what a
+B-spline is. Stretching linearly reconstructs the picture with a tent — the order-1
+B-spline. A quadratic stretch uses the order-2 one, and B-splines are boxes convolved
+together, so `B2 = B1 * B0`: a quadratic stretch *is* a linear stretch of a picture blurred
+by one more box. SDL offers nearest and linear and nothing else, so the box is done here, to
+the 256×240 frame, and the tent is left to the renderer — three taps each way over 61,440
+samples rather than a resample of every pixel in the window.
+
+Doing it at source resolution is also the more faithful place. Softness is bandwidth, a
+property of the *signal* like the scanlines and unlike the mask, so it is measured in
+console pixels and must not change when the window is resized.
+
+The weight is derived rather than chosen. How much blur a kernel carries is its variance,
+and variances add when kernels convolve: a tent's is 1/6 and `B2`'s is 1/4, so the kernel in
+front of it must carry 1/12, and a symmetric three-tap `[t, 1-2t, t]` has variance `2t`.
+Hence `t = 1/24`, which is what `CRT_SOFTEN` is. Anything larger is a blurrier picture, not
+a rounder one. It is a small change on purpose — at these magnifications a linear stretch is
+already most of the blur — and measured against the same frame rendered with the weight at
+zero it moves 28% of the screen's pixels, by 0.8 levels on average and 33 at the sharpest
+edges. Flat colour is untouched, which is the point: the weights sum to one.
 
 Three things about it came out of measuring screenshots rather than from taste, and each
 one changed the design:

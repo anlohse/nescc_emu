@@ -13,23 +13,29 @@
 //   2. It multiplied what was left by a mask. Colour came from three phosphor
 //      stripes behind a grille, and the beam drew lines with gaps between them.
 //
-// So: stretch with a linear filter first, then multiply by
+// So: stretch it soft first, then multiply by
 //
 //   [R  G  B ]
 //   [R  G  B ]
 //   [r  g  b ]      <- dimmer, where the beam was fading
 //
-// The important part is *where* that mask lives. It is a property of the screen,
-// not of the signal -- the stripes were in the glass, at a pitch that had nothing
-// to do with what resolution was being displayed. So it is built in output pixels
-// and multiplied over the stretched picture, which is both more faithful and the
-// reason this works at any window size rather than only at 3x.
+// The important part is *where* each of those lives, and they live in different
+// places. The mask is a property of the screen: the stripes were in the glass, at
+// a pitch that had nothing to do with what resolution was being displayed. So it
+// is built in output pixels and multiplied over the stretched picture, which is
+// both more faithful and the reason this works at any window size rather than
+// only at 3x.
 //
-// Scanlines are the other way around: they *are* in the signal, one per line the
-// console drew, so their spacing follows the source rather than the screen.
+// The blur and the scanlines are the other way around. They are in the *signal*
+// -- the gaps are one per line the console drew, and softness is bandwidth -- so
+// the scanline spacing follows 240 rather than the window, and the blur is
+// measured in console pixels and does not change when the window is resized.
 //
-// The multiply is one blended draw on the GPU, and the stretch is what a
-// renderer does anyway. Nothing here touches a pixel per frame.
+// Which is what makes this cheap. The multiply is one blended draw on the GPU and
+// the stretch is what a renderer does anyway; the only per-frame arithmetic is
+// three taps each way over the 256x240 frame, which is the box that turns the
+// renderer's linear stretch into a quadratic one. Nothing is done per *output*
+// pixel, so a maximised window costs exactly what a small one does.
 //
 
 #include <cstdint>
@@ -53,14 +59,30 @@ namespace nesfe {
  * A brick wall, but stacked sideways -- the columns stay in step and the *gaps*
  * alternate. It is the reason a television never looked quite like a monitor
  * showing the same picture.
+ *
+ * Each kind comes in two pitches, which is a second, independent thing: how many
+ * output pixels one triad spans. Three is one pixel per phosphor, which is the
+ * coarse, obvious mask. Two puts the same three phosphors in two pixels -- a
+ * finer grille on the same screen, which is what a smaller dot pitch was -- and
+ * every output pixel then straddles a stripe boundary rather than sitting inside
+ * one. Coverage is integrated for that reason, so both pitches come out of the
+ * same arithmetic and neither can favour a channel.
  */
 enum CrtMaskKind {
-	CRT_APERTURE_GRILLE,   /**< unbroken stripes: a monitor, or a Trinitron */
-	CRT_SLOT_MASK          /**< staggered slots: an ordinary television */
+	CRT_APERTURE_GRILLE,     /**< unbroken stripes: a monitor, three pixels to a triad */
+	CRT_SLOT_MASK,           /**< staggered slots: a television, three pixels to a triad */
+	CRT_APERTURE_GRILLE_2,   /**< unbroken stripes, two pixels to a triad */
+	CRT_SLOT_MASK_2          /**< staggered slots, two pixels to a triad */
 };
 
-/** How many output pixels one red-green-blue triad of the mask spans. */
+/** How many output pixels one red-green-blue triad of the coarse mask spans. */
 const int CRT_MASK_PITCH = 3;
+
+/** And of the fine one: three phosphors sharing two pixels. */
+const int CRT_FINE_PITCH = 2;
+
+/** The pitch @p kind is drawn at, in output pixels. */
+int crtMaskPitch(CrtMaskKind kind);
 
 /**
  * How far a slot mask's bridges are from its neighbouring column's, in lines.
@@ -91,6 +113,42 @@ extern const float CRT_SCANLINE;
  * clip anything at all.
  */
 extern const float CRT_LIFT;
+
+/**
+ * How much of a source pixel each of its two neighbours gets, per axis.
+ *
+ * This is what turns the renderer's linear stretch into a quadratic one, and the
+ * number is derived rather than chosen. Stretching linearly reconstructs the
+ * picture with a tent -- the order-1 B-spline. Stretching quadratically uses the
+ * order-2 one, and B-splines are boxes convolved together, so B2 = B1 * B0: a
+ * quadratic stretch *is* a linear stretch of a picture blurred by one more box.
+ *
+ * Doing that box here, on 256x240 samples, rather than on every pixel of a
+ * window, is both far cheaper and more faithful. Softness is bandwidth -- a
+ * property of the signal, like the scanlines and unlike the mask -- so it is
+ * measured in console pixels and must not change when the window is resized.
+ *
+ * The weight follows from matching how much the two blur. A tent has variance
+ * 1/6 and B2 has 1/4, so the kernel in front of it must carry 1/12; for a
+ * symmetric three-tap [t, 1-2t, t] the variance is 2t, which gives t = 1/24.
+ * Larger would be a blurrier picture than a quadratic, not a rounder one.
+ */
+extern const float CRT_SOFTEN;
+
+/**
+ * Blur one frame by a source pixel, ready for a linear stretch to finish it.
+ *
+ * Separable, three taps, and held at the edges rather than run off them --
+ * treating what is outside the picture as black would draw a dark border the
+ * console never sent.
+ *
+ * @param picture  width * height pixels of 0xAARRGGBB
+ * @param scratch  width * height of working space, owned by the caller so that
+ *                 nothing is allocated per frame
+ * @param out      width * height; may not overlap @p picture or @p scratch
+ */
+void softenPicture(const std::uint32_t* picture, int width, int height,
+		std::uint32_t* scratch, std::uint32_t* out);
 
 /**
  * Build the mask for a picture @p width by @p height output pixels.

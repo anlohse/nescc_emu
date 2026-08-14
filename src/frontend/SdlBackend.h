@@ -97,6 +97,16 @@ private:
 	SDL_Texture* m_texture;
 	std::uint32_t m_argbPalette[64];
 	std::vector<std::uint32_t> m_pixels;
+	/**
+	 * The frame blurred by one source pixel, and the working space for it.
+	 *
+	 * Only the CRT styles use these. Together with the renderer's linear filter
+	 * they make the stretch quadratic, which is what a beam that was never a
+	 * point actually did to a picture -- and doing the blur here, on 256x240
+	 * samples, keeps it the same blur at every window size.
+	 */
+	std::vector<std::uint32_t> m_scratch;
+	std::vector<std::uint32_t> m_soft;
 	int m_width;
 	int m_height;
 	/** What the renderer's logical width is: m_width, or WIDE_WIDTH. */

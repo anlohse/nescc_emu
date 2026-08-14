@@ -146,6 +146,73 @@ TEST_CASE("staggering_the_slots_costs_no_light_at_all") {
 	CHECK(staggeredTotal < alignedTotal * 1.01);
 }
 
+TEST_CASE("a_triad_gives_every_channel_the_same_share_at_either_pitch") {
+	// The violet case, and the reason coverage is integrated rather than tabulated.
+	//
+	// At three pixels to a triad each pixel is one stripe and a table is right by
+	// accident. At two, three stripes share two pixels and every pixel straddles a
+	// boundary; a table written by hand gave red and blue a whole stripe each and
+	// green two halves, which is a fifth less green. A mask short of one channel
+	// does not dim a picture, it tints it -- and the tint of missing green is
+	// violet, which is exactly what showed up on screen.
+	//
+	// Integrating cannot get this wrong, because the three stripes are the same
+	// width. That is a proof rather than a tuning, so it is checked as one.
+	const CrtMaskKind KINDS[] = {
+		CRT_APERTURE_GRILLE, CRT_SLOT_MASK,
+		CRT_APERTURE_GRILLE_2, CRT_SLOT_MASK_2
+	};
+	double meanPerPixel[4] = { 0.0, 0.0, 0.0, 0.0 };
+
+	for (int k = 0; k < 4; k++) {
+		CAPTURE(k);
+		const int pitch = crtMaskPitch(KINDS[k]);
+		// One line tall and one triad wide, so nothing but the stripes varies.
+		const std::vector<std::uint32_t> m = mask(pitch, 1, 1, KINDS[k]);
+
+		int totals[3] = { 0, 0, 0 };
+		for (int x = 0; x < pitch; x++) {
+			totals[0] += red(m[x]);
+			totals[1] += green(m[x]);
+			totals[2] += blue(m[x]);
+		}
+		CAPTURE(totals[0]);
+		CAPTURE(totals[1]);
+		CAPTURE(totals[2]);
+		// To within the rounding of a byte, which is all the slack there is.
+		CHECK(std::abs(totals[0] - totals[1]) <= 2);
+		CHECK(std::abs(totals[1] - totals[2]) <= 2);
+		meanPerPixel[k] = (totals[0] + totals[1] + totals[2]) / (3.0 * pitch);
+	}
+
+	// And the pitch changes how fine the mask is, not how bright it is. Both
+	// pitches integrate the same continuous stripes over the same total width, so
+	// switching between them is a change of texture and nothing else -- which is
+	// what lets the brightness control mean one thing across all four styles.
+	CAPTURE(meanPerPixel[0]);
+	CAPTURE(meanPerPixel[2]);
+	CHECK(std::abs(meanPerPixel[0] - meanPerPixel[2]) < 1.0);
+}
+
+TEST_CASE("the_fine_mask_still_runs_red_to_blue_and_repeats_every_two_pixels") {
+	// Finer, not different. Each pixel now leans towards a phosphor instead of
+	// being one, so the order is what survives: the left of a triad is the reddest
+	// thing in it and the right the bluest, with green shared between them and
+	// therefore never the largest anywhere.
+	const std::vector<std::uint32_t> m =
+			mask(CRT_FINE_PITCH * 4, 1, 1, CRT_APERTURE_GRILLE_2);
+
+	for (int x = 0; x < CRT_FINE_PITCH * 4; x += CRT_FINE_PITCH) {
+		CAPTURE(x);
+		CHECK(red(m[x]) > green(m[x]));
+		CHECK(green(m[x]) > blue(m[x]));
+		CHECK(blue(m[x + 1]) > green(m[x + 1]));
+		CHECK(green(m[x + 1]) > red(m[x + 1]));
+	}
+	for (int x = 0; x + CRT_FINE_PITCH < CRT_FINE_PITCH * 4; x++)
+		CHECK_EQ(m[x], m[x + CRT_FINE_PITCH]);
+}
+
 TEST_CASE("the_mask_is_a_multiplier_so_nothing_in_it_exceeds_full") {
 	// Drawn with a modulate blend, where 255 means "leave this channel alone".
 	// A value above that would be meaningless, and a mask of all 255 would be no
@@ -274,14 +341,15 @@ TEST_CASE("a_fractional_vertical_scale_does_not_band") {
 namespace {
 
 /** One console pixel through both stages: lift the colour, average the mask. */
-void throughFilter(std::uint32_t colour, double* r, double* g, double* b) {
+void throughFilter(std::uint32_t colour, double* r, double* g, double* b,
+		CrtMaskKind kind = CRT_APERTURE_GRILLE) {
 	const std::uint32_t one[64] = { colour };
 	std::uint32_t lifted[64];
 	gammaPalette(one, CRT_LIFT, lifted);
 
-	// A 3x3 patch of mask is one console pixel's worth at 3x. Averaging it is
-	// what an eye does at a normal viewing distance.
-	const std::vector<std::uint32_t> m = mask(CRT_MASK_PITCH, 3, 1);
+	// One triad wide and three rows tall is one console pixel's worth at 3x.
+	// Averaging it is what an eye does at a normal viewing distance.
+	const std::vector<std::uint32_t> m = mask(crtMaskPitch(kind), 3, 1, kind);
 	*r = 0.0;
 	*g = 0.0;
 	*b = 0.0;
@@ -325,6 +393,38 @@ TEST_CASE("a_saturated_colour_keeps_its_hue_through_the_filter") {
 	CHECK(r > g);
 }
 
+TEST_CASE("no_style_of_mask_is_allowed_to_shift_a_hue") {
+	// The same question asked of all four, because it came back. The fine mask was
+	// added with its coverage written out by hand, green ended up a fifth short of
+	// red and blue, and Mario's sky went violet -- the same symptom as the lavender
+	// above, from a different cause: clipping the first time, an unbalanced mask
+	// the second.
+	//
+	// So the property is pinned for every style rather than for the one that was
+	// wrong. A mask may take as much light as it likes; what it may not do is take
+	// more of one channel than another.
+	const CrtMaskKind KINDS[] = {
+		CRT_APERTURE_GRILLE, CRT_SLOT_MASK,
+		CRT_APERTURE_GRILLE_2, CRT_SLOT_MASK_2
+	};
+	const std::uint32_t sky = 0xFF9088FFu;          // 144, 136, 255
+
+	for (int k = 0; k < 4; k++) {
+		CAPTURE(k);
+		double r = 0.0;
+		double g = 0.0;
+		double b = 0.0;
+		throughFilter(sky, &r, &g, &b, KINDS[k]);
+		CAPTURE(r);
+		CAPTURE(g);
+		CAPTURE(b);
+		CHECK((b / r) > (255.0 / 144.0) * 0.85);
+		CHECK((r / g) > (144.0 / 136.0) * 0.85);
+		CHECK(b > g);
+		CHECK(r > g);
+	}
+}
+
 TEST_CASE("the_filter_dims_the_picture_without_gutting_it") {
 	// What the whole thing costs across the palette. Landing at 1.0 is not the
 	// goal -- a mask multiplies, so some light has to go, and a television really
@@ -346,6 +446,87 @@ TEST_CASE("the_filter_dims_the_picture_without_gutting_it") {
 
 	CHECK(filtered > plain * 0.60);
 	CHECK(filtered < plain * 0.95);
+}
+
+namespace {
+
+/** One picture through the softening pass, scratch and all. */
+std::vector<std::uint32_t> soften(std::vector<std::uint32_t> picture,
+		int width, int height) {
+	std::vector<std::uint32_t> scratch(picture.size(), 0);
+	std::vector<std::uint32_t> out(picture.size(), 0);
+	softenPicture(picture.data(), width, height, scratch.data(), out.data());
+	return out;
+}
+
+} // namespace
+
+TEST_CASE("softening_leaves_a_flat_picture_and_its_edges_alone") {
+	// Two properties at once, and both matter. The weights sum to one, so a flat
+	// colour has to come back unchanged -- a blur that dims what it touches would
+	// darken every sky in every game.
+	//
+	// The edges are the same statement at the border. Running the kernel off the
+	// picture and calling what is outside black would draw a dark frame around a
+	// screen the console filled to the corners, so the outermost sample is held
+	// instead. A flat picture is where that shows: if the edges were wrong, the
+	// first and last row would come back darker than the middle.
+	const std::uint32_t sky = 0xFF9088FFu;
+	const std::vector<std::uint32_t> out = soften(
+			std::vector<std::uint32_t>(8 * 6, sky), 8, 6);
+	for (std::size_t i = 0; i < out.size(); i++) {
+		CAPTURE(i);
+		CHECK_EQ(out[i], sky);
+	}
+}
+
+TEST_CASE("softening_is_the_box_a_quadratic_stretch_is_missing") {
+	// Where the weight comes from, checked against its derivation rather than
+	// against a screenshot.
+	//
+	// A linear stretch reconstructs with a tent, which is the order-1 B-spline. A
+	// quadratic one uses the order-2, and B-splines are boxes convolved together:
+	// B2 = B1 * B0. So a quadratic stretch is a linear stretch of a picture that
+	// has had one more box applied -- which is the whole reason this can be three
+	// taps on 256x240 samples instead of a resample of every pixel in the window.
+	//
+	// How much blur a kernel carries is its variance, and variances add when
+	// kernels convolve. A tent's is 1/6 and B2's is 1/4, so this one has to be
+	// 1/12. That is the number measured here, off an impulse, and it is what makes
+	// the result a quadratic stretch rather than merely a blurrier linear one.
+	const int width = 9;
+	std::vector<std::uint32_t> impulse(width, 0xFF000000u);
+	impulse[4] = 0xFFFFFFFFu;
+	const std::vector<std::uint32_t> out = soften(impulse, width, 1);
+
+	double total = 0.0;
+	double moment = 0.0;
+	for (int x = 0; x < width; x++) {
+		const double weight = red(out[x]);
+		total += weight;
+		moment += weight * (x - 4) * (x - 4);
+	}
+
+	// Nothing was lost on the way through: what a blur spreads it must also keep.
+	CAPTURE(total);
+	CHECK(std::abs(total - 255.0) <= 2.0);
+
+	const double variance = moment / total;
+	CAPTURE(variance);
+	CHECK(std::abs(variance - 1.0 / 12.0) < 0.01);
+
+	// And it is symmetric, or a still picture would drift sideways.
+	CHECK_EQ(red(out[3]), red(out[5]));
+
+	// A single tall column proves the vertical pass is the same kernel and not a
+	// transposed accident.
+	std::vector<std::uint32_t> column(width, 0xFF000000u);
+	column[4] = 0xFFFFFFFFu;
+	const std::vector<std::uint32_t> down = soften(column, 1, width);
+	for (int y = 0; y < width; y++) {
+		CAPTURE(y);
+		CHECK_EQ(red(down[y]), red(out[y]));
+	}
 }
 
 TEST_CASE("a_gamma_of_one_changes_nothing_and_the_directions_are_the_right_way_round") {

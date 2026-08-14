@@ -3,6 +3,7 @@
 #include "BindingsDialog.h"
 #include "../plugin/FieldsDialog.h"
 #include "CrtFilter.h"
+#include <cstring>
 
 #include <SDL_syswm.h>
 
@@ -47,6 +48,31 @@ bool isBound(const SDL_GameControllerButton (&map)[8], SDL_GameControllerButton 
 			return true;
 	return false;
 }
+
+CrtMaskKind parseCrtMaskKind(const char* name) {
+	if (std::strcmp(name, "crt-monitor") == 0)
+		return CRT_APERTURE_GRILLE;
+	if (std::strcmp(name, "crt-monitor-2") == 0)
+		return CRT_APERTURE_GRILLE_2;
+	if (std::strcmp(name, "crt-tv") == 0)
+		return CRT_SLOT_MASK;
+	if (std::strcmp(name, "crt-tv-2") == 0)
+		return CRT_SLOT_MASK_2;
+	return CRT_SLOT_MASK;   // the default
+}
+
+/**
+ * The scaling choices, in the order the dialog offers them.
+ *
+ * One table read both ways, which is the point of having it here rather than
+ * inside configure(): a list that is written by index and read back by a
+ * hand-written chain of comparisons is a list that forgets settings it has no
+ * branch for, and this one had grown two of those.
+ */
+const char* const FILTERS[] = {
+	"sharp", "smooth", "crt-tv", "crt-monitor", "crt-tv-2", "crt-monitor-2"
+};
+const int FILTER_COUNT = static_cast<int>(sizeof(FILTERS) / sizeof(FILTERS[0]));
 
 /**
  * The brightness steps, as the text that goes in the file.
@@ -104,6 +130,11 @@ bool SdlVideo::open(const VideoOptions& options, Error* error) {
 	m_width = nes::Ppu::SCREEN_WIDTH;
 	m_height = nes::Ppu::SCREEN_HEIGHT;
 	m_pixels.assign(static_cast<std::size_t>(m_width) * m_height, 0);
+	// Sized once here rather than per frame. The softening pass is separable, so
+	// it needs somewhere to put the horizontal half before the vertical one reads
+	// it back, and a frame is not the place to be allocating.
+	m_scratch.assign(m_pixels.size(), 0);
+	m_soft.assign(m_pixels.size(), 0);
 
 	m_window = SDL_CreateWindow(options.title,
 			SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
@@ -188,8 +219,7 @@ bool SdlVideo::applyPictureSettings() {
 	m_crt = (filter.rfind("crt", 0) == 0);
 	// A plain "crt" from an older configuration means the television, which is
 	// both the default and what an NES was actually plugged into.
-	m_maskKind = (filter == "crt-monitor")
-			? CRT_APERTURE_GRILLE : CRT_SLOT_MASK;
+	m_maskKind = parseCrtMaskKind(filter.c_str());
 	m_logicalWidth = (setting("aspect", "square") == "tv") ? WIDE_WIDTH : m_width;
 
 	// The CRT style letterboxes for itself, because its mask has to land on whole
@@ -202,9 +232,15 @@ bool SdlVideo::applyPictureSettings() {
 			m_crt ? 0 : m_height);
 
 	// A television was never sharp -- soft beam, bandwidth-limited signal,
-	// phosphor spreading whatever light it got -- so the CRT style stretches with
-	// a linear filter and multiplies the mask over the result. Blurring first is
-	// what stops it looking like a grid of coloured squares.
+	// phosphor spreading whatever light it got -- so the CRT style stretches soft
+	// and multiplies the mask over the result. Blurring first is what stops it
+	// looking like a grid of coloured squares.
+	//
+	// Linear here even for the CRT, which wants a quadratic stretch, because a
+	// quadratic one is built out of this: SDL offers nearest and linear and
+	// nothing else, and a quadratic B-spline is a tent convolved with one more
+	// box. So the box is done to the frame in softenPicture and the tent is left
+	// to the renderer, which was going to run anyway.
 	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY,
 			(filter == "smooth" || m_crt) ? "linear" : "nearest");
 
@@ -300,7 +336,19 @@ void SdlVideo::present(const std::uint8_t* indices, int width, int height) {
 	for (std::size_t i = 0; i < count; i++)
 		m_pixels[i] = m_argbPalette[indices[i] & 0x3F];
 
-	SDL_UpdateTexture(m_texture, nullptr, m_pixels.data(),
+	// The first half of a quadratic stretch, and the only part of it that costs
+	// anything: three taps each way over 256x240 samples, after which the
+	// renderer's linear filter finishes the job for free. It goes here, before
+	// the mask, because it belongs to the signal rather than to the glass -- so
+	// it is the same blur however large the window is.
+	const std::uint32_t* frame = m_pixels.data();
+	if (m_crt) {
+		softenPicture(m_pixels.data(), m_width, m_height, m_scratch.data(),
+				m_soft.data());
+		frame = m_soft.data();
+	}
+
+	SDL_UpdateTexture(m_texture, nullptr, frame,
 			m_width * static_cast<int>(sizeof(std::uint32_t)));
 	SDL_SetRenderDrawColor(m_renderer, 0, 0, 0, 255);
 	SDL_RenderClear(m_renderer);
@@ -409,13 +457,17 @@ void SdlVideo::configure() {
 	// aperture grille ran its stripes unbroken down the tube.
 	fields[0].options.push_back("CRT television  (staggered slots)");
 	fields[0].options.push_back("CRT monitor  (unbroken stripes)");
+	// And the same two at a finer pitch: three phosphors to two screen pixels
+	// rather than three, which is what a smaller dot pitch looked like.
+	fields[0].options.push_back("CRT television  (fine slots, 2 pixels)");
+	fields[0].options.push_back("CRT monitor  (fine stripes, 2 pixels)");
 	const std::string filter = setting("filter", "sharp");
-	if (filter == "crt-monitor")
-		fields[0].selected = 3;
-	else if (filter.rfind("crt", 0) == 0)
-		fields[0].selected = 2;
-	else
-		fields[0].selected = (filter == "smooth") ? 1 : 0;
+	// A plain "crt" from an older configuration means the television, which is
+	// both the default and what an NES was actually plugged into.
+	fields[0].selected = (filter == "crt") ? 2 : 0;
+	for (int i = 0; i < FILTER_COUNT; i++)
+		if (filter == FILTERS[i])
+			fields[0].selected = i;
 
 	fields[1].label = "Pixel shape";
 	fields[1].options.push_back("Square  (256 x 240)");
@@ -449,9 +501,11 @@ void SdlVideo::configure() {
 			"Applied as soon as you press OK."))
 		return;
 
-	static const char* const FILTERS[] =
-			{ "sharp", "smooth", "crt-tv", "crt-monitor" };
-	putSetting("filter", FILTERS[fields[0].selected & 3]);
+	// Bounds-checked rather than masked. A mask happened to work while there were
+	// four entries, because three is every bit of three; with six it silently
+	// mapped the two television entries onto "sharp" and "smooth".
+	if (fields[0].selected >= 0 && fields[0].selected < FILTER_COUNT)
+		putSetting("filter", FILTERS[fields[0].selected]);
 	putSetting("aspect", fields[1].selected == 1 ? "tv" : "square");
 	if (fields[2].selected >= 0 && fields[2].selected < GAMMA_STEP_COUNT)
 		putSetting("gamma", GAMMA_STEPS[fields[2].selected]);
