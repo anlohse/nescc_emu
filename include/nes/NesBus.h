@@ -45,6 +45,12 @@ public:
 	NesBus(Cartridge* cartridge, Ppu* ppu, Apu* apu = nullptr);
 
 	uint8 read(uint16 address) override;
+
+private:
+	/** The decode itself. read() wraps it to remember what the bus carried. */
+	uint8 readDecoded(uint16 address);
+
+public:
 	void write(uint16 address, uint8 val) override;
 
 	/**
@@ -146,6 +152,16 @@ private:
 	int m_dmaStall;
 	unsigned long m_stubReads;
 	unsigned long m_stubWrites;
+	/**
+	 * The last byte the data bus carried, which is what "open bus" means.
+	 *
+	 * Nothing drives the lines when an address decodes to no device, so a read
+	 * comes back with whatever was last on them -- usually part of the address of
+	 * the very instruction doing the reading. Deliberately not saved: it is a
+	 * single byte that the next access overwrites, so restoring it wrong is
+	 * invisible, and it is not worth another state version.
+	 */
+	std::uint8_t m_openBus;
 
 	// PPU dots per CPU cycle as a fraction: 3/1 on NTSC, 16/5 on PAL. PAL's
 	// ratio is not a whole number, so the leftover is carried between cycles

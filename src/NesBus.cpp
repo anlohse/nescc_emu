@@ -29,7 +29,7 @@ const int OAM_DMA_CYCLES = 513;
 
 NesBus::NesBus(Cartridge* cartridge, Ppu* ppu, Apu* apu) :
 		m_ram(), m_cartridge(cartridge), m_ppu(ppu), m_apu(apu), m_dmaStall(0),
-		m_stubReads(0), m_stubWrites(0),
+		m_stubReads(0), m_stubWrites(0), m_openBus(0),
 		m_dotNumerator(3), m_dotDenominator(1), m_dotRemainder(0),
 		m_ticking(false), m_accountedCycles(0), m_overruns(0) {
 	m_ram.fill(0);
@@ -132,6 +132,15 @@ std::uint8_t NesBus::readZapper() const {
 /* ------------------------------------------------------------------------- */
 
 uint8 NesBus::read(uint16 address) {
+	// Whatever comes back was, by definition, on the data bus -- which is what an
+	// unmapped read later returns. Recorded here rather than at each decode branch
+	// so there is one place it can be got wrong.
+	const uint8 value = readDecoded(address);
+	m_openBus = value;
+	return value;
+}
+
+uint8 NesBus::readDecoded(uint16 address) {
 	cycle();
 
 	if (address <= RAM_END)
@@ -157,18 +166,36 @@ uint8 NesBus::read(uint16 address) {
 		// the real read and never peek().
 		if (address == APU_STATUS)
 			return m_apu ? m_apu->readStatus() : 0;
-		// Everything else in this range is write-only or unmapped.
+		// Everything else here is write-only or unallocated, and neither drives the
+		// data bus: $4000-$4013 and $4014 are the APU's and the DMA's write-only
+		// registers, $4018-$401F is the test space the 2A03 never decoded. All of
+		// them read back as whatever the bus last carried.
 		m_stubReads++;
-		return 0;
+		return m_openBus;
+	}
+
+	// $4020-$40FF: past everything the 2A03 decodes, and past everything any board
+	// implemented here decodes either -- NROM, UxROM, CNROM, AxROM, MMC1, MMC3 and
+	// mapper 87 all start at $6000. So nothing drives the lines.
+	//
+	// Named rather than folded into the range above because it is a board-level
+	// claim rather than a chip-level one: a Famicom Disk System or one of the
+	// pirate boards that does decode here would need this back.
+	if (address < 0x4100) {
+		m_stubReads++;
+		return m_openBus;
 	}
 
 	if (m_cartridge)
 		return m_cartridge->cpuRead(address);
-	return 0; // open bus
+	return m_openBus;   // no cartridge answering: nothing drives the lines
 }
 
 void NesBus::write(uint16 address, uint8 val) {
 	cycle();
+	// A write drives the data bus just as a read does, so it is what a later
+	// unmapped read finds there.
+	m_openBus = val;
 
 	if (address <= RAM_END) {
 		m_ram[address & RAM_MASK] = val;

@@ -91,8 +91,13 @@ private:
 	bool m_failed;
 };
 
-/** Bumped whenever the shape of a saved state changes. */
-const std::uint32_t STATE_VERSION = 1;
+/**
+ * Bumped whenever the shape of a saved state changes.
+ *
+ * 2: the PPU carries the dot at which the sprite overflow flag is due, so that a
+ *    state saved partway along a line restores with it still pending.
+ */
+const std::uint32_t STATE_VERSION = 2;
 
 } // namespace nes
 

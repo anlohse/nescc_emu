@@ -332,3 +332,45 @@ TEST_CASE("a_register_is_read_at_the_cycle_its_access_happens") {
 		CHECK_EQ((console.cpuRegisters().a & 0x80) != 0, c.expectFlag);
 	}
 }
+
+TEST_CASE("an_unmapped_read_returns_whatever_the_bus_last_carried") {
+	// Open bus, which is not zero. Nothing drives the data lines when an address
+	// decodes to no device, so the read comes back with whatever was last on them.
+	// $4018-$40FF is the clearest case: the 2A03 never decoded it and no board
+	// implemented here does either.
+	//
+	// The value is arranged deliberately rather than hoped for. A write puts a byte
+	// on the bus; the read that follows finds it still there.
+	std::vector<std::uint8_t> program;
+	program.push_back(0xA9);          // LDA #$5A
+	program.push_back(0x5A);
+	program.push_back(0x8D);          // STA $0300 -- drives $5A onto the bus
+	program.push_back(0x00);
+	program.push_back(0x03);
+	program.push_back(0xAD);          // LDA $4018 -- unmapped
+	program.push_back(0x18);
+	program.push_back(0x40);
+
+	auto console = makeConsole(program, 0xC000);
+	console->step();                  // LDA #$5A
+	console->step();                  // STA $0300
+	console->step();                  // LDA $4018
+
+	// Not $5A: the read's own address bytes crossed the bus after the store, so
+	// what lingers is the high byte of $4018. What matters is that it is the last
+	// thing carried rather than a hardcoded zero.
+	CHECK_EQ(console->cpuRegisters().a, 0x40);
+}
+
+TEST_CASE("a_write_only_apu_register_reads_as_open_bus_too") {
+	// $4000-$4013 and $4014 answer nothing, so they behave the same way. Reading
+	// one used to give zero, which is a value the hardware never returns.
+	std::vector<std::uint8_t> program;
+	program.push_back(0xAD);          // LDA $4000
+	program.push_back(0x00);
+	program.push_back(0x40);
+
+	auto console = makeConsole(program, 0xC000);
+	console->step();
+	CHECK_EQ(console->cpuRegisters().a, 0x40);
+}

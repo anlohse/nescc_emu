@@ -362,7 +362,14 @@ int main(int argc, char** argv) {
 			cart->isNes20() ? ", NES 2.0" : "", cart->hasBattery() ? ", battery" : "",
 			cart->hasBusConflicts() ? ", bus conflicts" : "");
 
-	console.reset();
+	// A power-up, not a reset. Starting a cold machine with reset() leaves the RAM
+	// holding whatever it was constructed with and skips the APU's $4017 = $00,
+	// which is not how a console starts -- and worse, it is not how the test
+	// harness starts one either, so every screenshot taken here was of a
+	// differently-booted machine than the one the gate was judging. That
+	// disagreement cost real time: a ROM's picture said FAILED while the gate's
+	// nametable said something else entirely, and neither was wrong.
+	console.powerOn();
 
 	// Asking for a shot is what says a light gun is plugged in. The console
 	// cannot tell on its own -- both devices answer the same two pins.

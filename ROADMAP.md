@@ -387,6 +387,107 @@ Roughly in order of how likely a real game is to notice:
   redraws changed a single pixel, because the split lands on a uniform band of sky where
   a few pixels of horizontal shift look exactly the same. The behaviour is real and now
   correct; nothing available demonstrates it, so it is pinned by unit tests instead.
+- ~~**Read the verdict off the screen.**~~ Done, and it was the best-value thing left on
+  this list by a distance. A quarter of the suite -- 25 of 93 ROMs -- predates blargg's
+  `$6000` protocol and reports by drawing on the screen, so the gate had been running them,
+  proving only that they did not hang, and counting them as "no result". They were not
+  unjudgeable, just unjudged.
+
+  Those ROMs draw with a font whose tiles **are** the ASCII codes, so the nametable is the
+  text: read it back and a screenshot becomes a string a test can assert on. No offset, no
+  per-ROM table, twenty lines of code. The proof it is the right mapping rather than a lucky
+  guess is that the blank tile is `0x20` -- it is a space because a space is what it means.
+  A first attempt added `0x20` to every index and read plausible lower-case English, which
+  was pure coincidence: `'S'` plus `0x20` is `'s'`, so the whole screen lower-cased itself
+  and looked right while every blank came back as `'@'`.
+
+  What it found is the argument for having done it. **19 of the 25 were passing silently** --
+  including all eleven sprite-zero-hit ROMs and five of the older vblank suite -- and those
+  are now locked in, so a regression in sprite-zero timing can no longer pass unnoticed.
+  **6 were failing invisibly:** four of the five sprite-overflow ROMs, and two more NMI-edge
+  cases. Sprite overflow matters, because games read that bit; the fifth, `5.Emulator`, is
+  the one that passes, and it is the one testing what an emulator gets right by accident.
+
+  **68 of 93 now pass and all 93 are judged.** The verdict is taken from the *pass* rather
+  than the failure, deliberately: `PASSED` is the same word in every suite where the failure
+  text is not, and one ROM's came back as `FA LED` because those fonts keep a narrower `I`
+  outside the ASCII run. Anything that is not a pass is a failure either way.
+- ~~**Evaluate sprites instead of counting them.**~~ Done. `$2002` bit 5 was set by
+  counting in-range sprites and tripping at nine, which is the one thing the hardware does
+  not do. The real PPU walks OAM with two indices -- one for the sprite, one for the byte
+  within it -- and once eight sprites are in range they stop advancing together, so it
+  begins comparing tile numbers, attributes and X positions against the scanline as though
+  they were Y coordinates. That misalignment is the whole of the overflow bug and it cuts
+  both ways: nine sprites on a line can leave the flag clear, and eight can set it.
+
+  Both directions are pinned by unit tests, because the false negative is the one no count
+  can produce. `sprite_overflow_tests/1.Basics` passes; **69 of 93**.
+
+  It also had a second defect worth naming: the flag was only evaluated when the
+  sprite-enable bit was set. The evaluation runs whenever *rendering* does and never
+  consults that bit.
+- ~~**A `$2007` write lands in the wrong place.**~~ Chased, and there is no bug in the write
+  path. Worth writing down because the conclusion is the opposite of the symptom.
+
+  `sprite_overflow_tests/4.Obscure` draws its verdict as `S PA SED`, and a trace of the
+  writes shows why: the third character goes to `$30C0` instead of `$20C4`, and `$30C0`
+  mirrors onto `$20C0`, which is column 0. `$20C4` becoming `$30C0` is precisely what the
+  rendering circuitry does to `v` -- fine Y increments by `0x1000` at the end of a line and
+  the reload at dot 257 puts coarse X back to zero. `v` is one register shared between the
+  CPU and the fetch logic, so a `$2007` write during rendering is corrupted on real hardware
+  in exactly this way. It is why every programming guide says not to do it.
+
+  So the question turns around: why is the ROM writing `$2007` while rendering? The trace
+  answers that too. It prints its title cleanly during vblank on lines 249 to 254, then
+  starts the verdict at line **261** and runs into lines 0, 1 and 2 -- the print routine
+  overran vblank. Something upstream is making it late, and the likeliest candidate is the
+  thing the neighbouring ROM is already complaining about: `3.Timing` says the overflow flag
+  is set at the wrong dot, and this ROM polls `$2002`. A flag that appears late makes a
+  polling loop run long.
+
+  Which makes the corruption a *symptom* of flag timing rather than a second defect, and
+  collapses two roadmap items into one.
+- ~~**Set the overflow flag at the dot the evaluation reaches it.**~~ Done. The flag was
+  raised while the line was drawn; the hardware raises it during the evaluation that runs
+  over dots 65 to 256 of the *previous* line, two dots per OAM byte, at whichever dot the
+  offending comparison falls on. So the dot is arithmetic: each in-range sprite costs four
+  bytes as it is copied, each rejected one costs a single Y read, and the flag lands at
+  `65 + 2 * bytes`. It follows the same pattern the sprite-zero hit already used, which was
+  the hint that this was the shape to reach for.
+
+  `sprite_overflow_tests/3.Timing` passes. **70 of 93.**
+
+  And the prediction that came with it was wrong, which is worth keeping. `4.Obscure` was
+  expected to clear at the same time, on the reasoning that its print routine overruns
+  vblank because it polls `$2002` for a flag that arrived late. `3.Timing` passes now and
+  `4.Obscure` prints `S PA SED` exactly as before, unchanged. Something else keeps it late.
+  Its entry says so rather than still pointing at the flag.
+
+  The unit test made the same mistake in miniature and is worth reading for it: sprites at
+  Y = 5 cover scanlines 6 to 13, so an arrangement that trips the flag trips it for every one
+  of them, and the first is what is observable. Aiming at line 9 found the flag already up --
+  correct behaviour, and the test's error.
+- ~~**Open bus, on the CPU side.**~~ Done. An address that decodes to no device left the
+  data lines undriven, so a read comes back with whatever was last on them -- and this
+  returned a hardcoded zero, which is a value the hardware never gives. The bus now
+  remembers the last byte it carried, in one place rather than at each decode branch, and
+  both reads and writes update it because both drive the lines.
+
+  Three regions needed it: the APU's write-only registers at `$4000-$4013` and `$4014`, the
+  test space at `$4018-$401F` that the 2A03 never decoded, and `$4020-$40FF`, which no board
+  implemented here decodes either -- NROM, UxROM, CNROM, AxROM, MMC1, MMC3 and mapper 87 all
+  begin at `$6000`. That last one is a board-level claim rather than a chip-level one and is
+  commented as such, because a Famicom Disk System would need it back.
+
+  `cpu_exec_space/test_cpu_exec_space_apu` passes. **71 of 93.** Worth watching the ROM's own
+  output while fixing it: it walks the region address by address, so it printed `4000` and
+  stopped, then `4000 4001 ... 401F 4020` and stopped -- which said exactly where the next
+  gap was without any guessing.
+- **Poll interrupts within an instruction, in emu6502.** The core charges an instruction's
+  cycles in one lump at the end, so an interrupt arriving partway through one cannot be
+  seen. Root cause of all four `cpu_interrupts_v2` ROMs and a prerequisite for the three
+  `ppu_vbl_nmi` edge cases: up to seven of the remaining failures from one change. Also the
+  most invasive thing left, which is why it is behind the write bug above.
 - **A decimal-mode switch in emu6502**: the 2A03 ignores the `D` flag in `ADC`/`SBC`
   and the core implements full BCD. No commercial game depends on this, which is why it
   is this far down.

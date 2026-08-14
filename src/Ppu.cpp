@@ -83,6 +83,7 @@ void Ppu::reset() {
 	m_nmiPending = false;
 	m_nmiDelay = 0;
 	m_sprite0HitDot = -1;
+	m_overflowDot = -1;
 	m_dotsSinceVblank = VBLANK_RACE_DOTS;
 	m_dotsSinceVblankEnd = VBLANK_RACE_DOTS;
 	m_vblankRaces = 0;
@@ -145,6 +146,21 @@ void Ppu::tickOne() {
 	if (visible && m_sprite0HitDot >= 0 && m_dot >= m_sprite0HitDot + 1) {
 		m_status |= STATUS_SPRITE0;
 		m_sprite0HitDot = -1;
+	}
+
+	// Sprite overflow, on the same principle and for the same reason: games poll
+	// $2002 for it, so *when* it appears is part of the behaviour. The evaluation
+	// that decides it runs here, on the line before the one it describes, so this
+	// is worked out at dot 65 for m_scanline + 1 and raised part-way along.
+	if (renderingEnabled() && (visible || preRender)) {
+		if (m_dot == SPRITE_EVAL_FIRST_DOT) {
+			const int height = (m_ctrl & CTRL_SPRITE_SIZE_16) ? 16 : 8;
+			m_overflowDot = overflowDotFor(m_scanline + 1, height);
+		}
+		if (m_overflowDot >= 0 && m_dot >= m_overflowDot) {
+			m_status |= STATUS_OVERFLOW;
+			m_overflowDot = -1;
+		}
 	}
 
 	if (renderingEnabled() && (visible || preRender)) {
@@ -284,6 +300,61 @@ void Ppu::updateA12() {
 /* Rendering                                                                  */
 /* ------------------------------------------------------------------------- */
 
+int Ppu::overflowDotFor(int line, int height) const {
+	// $2002 bit 5, and it is not "were there more than eight sprites". The
+	// hardware walks OAM with two indices -- n for the sprite, m for the byte
+	// within it -- and once eight sprites are in range it stops incrementing them
+	// as a pair. From there n and m both advance, so the byte it reads as a Y
+	// coordinate is the next sprite's *tile number*, then an *attribute*, then an
+	// *X position*, then a Y again. It is comparing the wrong bytes against the
+	// scanline, and whatever they happen to contain decides the flag.
+	//
+	// That misalignment is the whole of the famous overflow bug, and it cuts both
+	// ways: a line with nine sprites can leave the flag clear, and a line with
+	// three can set it. Counting instead gets the common case right and every
+	// interesting case wrong, which is exactly the shape of blargg's results --
+	// 5.Emulator passed, because it tests what an emulator gets right by accident,
+	// while Basics, Details, Timing and Obscure all failed.
+	// And the dot it lands on is the other half of the story. The evaluation is not
+	// instantaneous: it walks OAM across dots 65 to 256 of the line *before* the
+	// one being evaluated, two dots per byte -- a read on the odd dot, a write to
+	// the secondary OAM on the even one. So the flag appears partway along a line,
+	// at a moment that depends on how far into OAM the offending byte sits, and a
+	// game polling $2002 can tell.
+	int n = 0;                 // which sprite
+	int m = 0;                 // which byte of it, and the source of the trouble
+	int found = 0;
+	int bytes = 0;             // OAM bytes read, which is what the clock counts
+
+	while (n < 64) {
+		bytes++;
+		// Sprite data is delayed a scanline, so OAM holds top - 1. Same
+		// convention as the renderer above, deliberately: these two have to agree
+		// about what "in range" means or the flag contradicts the picture.
+		const int row = line - m_oam[n * 4 + m] - 1;
+		const bool inRange = (row >= 0 && row < height);
+
+		if (found < 8) {
+			// Still filling the eight slots. m is zero throughout this phase --
+			// copying a sprite walks m through 1, 2, 3 and back to 0 -- so this
+			// really is reading a Y coordinate.
+			if (inRange) {
+				found++;
+				bytes += 3;    // and the other three bytes get copied too
+			}
+			n++;
+			continue;
+		}
+
+		// Eight found. Now the reads go wrong.
+		if (inRange)
+			return SPRITE_EVAL_FIRST_DOT + 2 * bytes;
+		n++;
+		m = (m + 1) & 3;       // and no carry into n, which is the bug
+	}
+	return -1;
+}
+
 void Ppu::renderScanline(int line, int fromX) {
 	std::uint8_t* row = m_framebuffer.data() + line * SCREEN_WIDTH;
 	const bool wholeLine = fromX <= 0;
@@ -338,6 +409,10 @@ void Ppu::renderScanline(int line, int fromX) {
 				bgPattern[x] = 0;
 	}
 
+	// The overflow flag is not decided here. It belongs to the evaluation the
+	// hardware runs on the *previous* line, so tickOne() raises it at the dot that
+	// evaluation reaches -- see overflowDotFor.
+
 	// Sprites are evaluated once per line and do not move partway across it:
 	// hardware picks them during the previous line and latches their patterns,
 	// so a redraw of the tail reuses what was found at the start.
@@ -364,10 +439,11 @@ void Ppu::renderScanline(int line, int fromX) {
 			if (rowInSprite < 0 || rowInSprite >= height)
 				continue;
 
-			if (++found > 8) {
-				m_status |= STATUS_OVERFLOW;
+			// Only the first eight are drawn. The ninth and beyond are dropped
+			// here; whether the *flag* is set is a different question, answered
+			// above by the evaluation rather than by this count.
+			if (++found > 8)
 				break;
-			}
 
 			const std::uint8_t tile = m_oam[i * 4 + 1];
 			const std::uint8_t attr = m_oam[i * 4 + 2];
@@ -657,6 +733,29 @@ void Ppu::writeRegister(std::uint16_t reg, std::uint8_t value) {
 		m_writeToggle = !m_writeToggle;
 		break;
 	case 7:
+		// A trace of where writes actually land, which is how the one that looked
+		// like a lost character in 4.Obscure was found to be landing at $30C0 --
+		// rendering having moved v out from under the CPU. Read once, because this
+		// is a hot path: a getenv per write is not free.
+		//
+		// NES_TRACE_VRAM=20C0 watches 32 bytes from there; =ALL watches letters.
+		{
+			static const char* const want = std::getenv("NES_TRACE_VRAM");
+			if (want) {
+				const std::uint16_t at =
+						static_cast<std::uint16_t>(m_vramAddr & 0x3FFF);
+				static const bool all = (want[0] == 'A');
+				static const unsigned low = all ? 0u
+						: static_cast<unsigned>(std::strtoul(want, nullptr, 16));
+				if (all ? (value >= 0x41 && value <= 0x5A)
+						: (at >= low && at < low + 0x20))
+					std::fprintf(stderr, "$2007 -> %04X = %02X  line %3d dot %3d"
+							"  rendering %d inc %d\n",
+							at, value, m_scanline, m_dot,
+							renderingEnabled() ? 1 : 0,
+							(m_ctrl & CTRL_INCREMENT_32) ? 32 : 1);
+			}
+		}
 		vramWrite(static_cast<std::uint16_t>(m_vramAddr & 0x3FFF), value);
 		m_vramAddr = static_cast<std::uint16_t>(
 				m_vramAddr + ((m_ctrl & CTRL_INCREMENT_32) ? 32 : 1));
@@ -761,6 +860,7 @@ void Ppu::serialize(State& state) {
 	state.value(m_nmiPending);
 	state.value(m_nmiDelay);
 	state.value(m_sprite0HitDot);
+	state.value(m_overflowDot);
 	state.value(m_dotsSinceVblank);
 	state.value(m_dotsSinceVblankEnd);
 	state.value(m_vblankRaces);
