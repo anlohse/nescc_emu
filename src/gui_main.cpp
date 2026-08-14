@@ -538,6 +538,44 @@ int main(int argc, char* argv[]) {
 		nesfe::PluginSettings settings(registry, config, host.handle());
 		app.dropDeadline();          // a modal dialog stops the emulator
 		settings.configure(kind);
+
+		// Pressing OK should change something. The dialog writes to the file, so
+		// the running plugin is asked to read it again -- and the host's own copy
+		// is reloaded too, because the bindings live there and the input plugin
+		// holds a reference to it rather than a copy of its own.
+		//
+		// The reload is deliberately not a whole-config reload: recentRoms, the
+		// window scale and the plugin ids can all have moved at runtime, and taking
+		// the file's version of those would undo whatever just happened.
+		nesgui::Config fromFile;
+		std::string ignored;
+		if (fromFile.load(configPath, &ignored)) {
+			for (int port = 0; port < 2; port++) {
+				for (int i = 0; i < 8; i++) {
+					config.keys[port][i] = fromFile.keys[port][i];
+					config.padButtons[port][i] = fromFile.padButtons[port][i];
+				}
+				config.device[port] = fromFile.device[port];
+				config.gamepad[port] = fromFile.gamepad[port];
+			}
+			config.pluginSettings = fromFile.pluginSettings;
+		}
+
+		nesplug::ApplyResult applied = nesplug::APPLY_UNSUPPORTED;
+		if (kind == 0)
+			applied = video.applySettings();
+		else if (kind == 1)
+			applied = audio.applySettings();
+		else
+			applied = input.applySettings();
+
+		// Say so when it did not take, rather than leaving somebody to guess why
+		// the picture looks the same. The input plugin reports UNSUPPORTED when it
+		// does not own its configuration, which is the normal case here and is
+		// already handled by the reload above -- so that one is not worth a box.
+		if (applied == nesplug::APPLY_PARTIAL) {
+			SDL_Log("some of those settings take effect the next time nes starts");
+		}
 		app.dropDeadline();
 	};
 

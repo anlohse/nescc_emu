@@ -100,47 +100,10 @@ bool SdlVideo::open(const VideoOptions& options, Error* error) {
 		return false;
 	}
 
-	// Letterbox at whatever size the window is dragged to. Which aspect that is
-	// is a real choice: the console's pixels were not square on a television,
-	// so a circle drawn in a game is an ellipse at 256x240 and a circle at
-	// 292x240. Sharpness is a choice too -- these are 8x8 tiles, not
-	// photographs, and most people want to see them.
-	const std::string filter = setting("filter", "sharp");
-	m_crt = (filter.rfind("crt", 0) == 0);
-	// A plain "crt" from an older configuration means the television, which is
-	// both the default and what an NES was actually plugged into.
-	m_maskKind = (filter == "crt-monitor")
-			? CRT_APERTURE_GRILLE : CRT_SLOT_MASK;
-	m_logicalWidth = (setting("aspect", "square") == "tv") ? WIDE_WIDTH : m_width;
-
-	// The CRT style letterboxes for itself, because its mask has to land on whole
-	// screen pixels: under a logical size the mask would be scaled along with the
-	// picture, and one-pixel stripes stretched by 3.4 turn into moire.
-	if (!m_crt)
-		SDL_RenderSetLogicalSize(m_renderer, m_logicalWidth, m_height);
-
-	// A television was never sharp -- soft beam, bandwidth-limited signal,
-	// phosphor spreading whatever light it got -- so the CRT style stretches with
-	// a linear filter and multiplies the mask over the result. Blurring first is
-	// what stops it looking like a grid of coloured squares.
-	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY,
-			(filter == "smooth" || m_crt) ? "linear" : "nearest");
-
-	m_texture = SDL_CreateTexture(m_renderer, SDL_PIXELFORMAT_ARGB8888,
-			SDL_TEXTUREACCESS_STREAMING, m_width, m_height);
-	if (!m_texture) {
+	if (!applyPictureSettings()) {
 		if (error) *error = std::string("SDL_CreateTexture: ") + SDL_GetError();
 		close();
 		return false;
-	}
-
-	if (m_crt) {
-		// A multiply cannot add light, so what the mask is about to take has to
-		// be paid in beforehand.
-		std::uint32_t brightened[64];
-		brightenForCrt(m_argbPalette, brightened);
-		for (int i = 0; i < 64; i++)
-			m_argbPalette[i] = brightened[i];
 	}
 
 	// The arrow sits exactly where a light gun is being aimed, which is the one
@@ -164,6 +127,79 @@ void SdlVideo::close() {
 	if (m_texture) { SDL_DestroyTexture(m_texture); m_texture = nullptr; }
 	if (m_renderer) { SDL_DestroyRenderer(m_renderer); m_renderer = nullptr; }
 	if (m_window) { SDL_DestroyWindow(m_window); m_window = nullptr; }
+}
+
+bool SdlVideo::applyPictureSettings() {
+	// Everything about how the picture is drawn, in one place so that it can be
+	// done again. Pressing OK in the settings dialog used to change a file and
+	// nothing else, which is a poor answer: somebody who has just chosen a
+	// different picture wants to see a different picture.
+	//
+	// The window is deliberately untouched. Only the renderer's state and the
+	// texture depend on these settings, so there is no reason to destroy a window
+	// -- which would lose its position, flash, and on some platforms lose the
+	// keyboard focus with it.
+	//
+	// Letterbox at whatever size the window is dragged to. Which aspect that is
+	// is a real choice: the console's pixels were not square on a television, so a
+	// circle drawn in a game is an ellipse at 256x240 and a circle at 292x240.
+	// Sharpness is a choice too -- these are 8x8 tiles, not photographs, and most
+	// people want to see them.
+	const std::string filter = setting("filter", "sharp");
+	m_crt = (filter.rfind("crt", 0) == 0);
+	// A plain "crt" from an older configuration means the television, which is
+	// both the default and what an NES was actually plugged into.
+	m_maskKind = (filter == "crt-monitor")
+			? CRT_APERTURE_GRILLE : CRT_SLOT_MASK;
+	m_logicalWidth = (setting("aspect", "square") == "tv") ? WIDE_WIDTH : m_width;
+
+	// The CRT style letterboxes for itself, because its mask has to land on whole
+	// screen pixels: under a logical size the mask would be scaled along with the
+	// picture, and one-pixel stripes stretched by 3.4 turn into moire.
+	//
+	// Zero turns a logical size off again, which matters when switching *away*
+	// from CRT: leaving the old one set would letterbox twice.
+	SDL_RenderSetLogicalSize(m_renderer, m_crt ? 0 : m_logicalWidth,
+			m_crt ? 0 : m_height);
+
+	// A television was never sharp -- soft beam, bandwidth-limited signal,
+	// phosphor spreading whatever light it got -- so the CRT style stretches with
+	// a linear filter and multiplies the mask over the result. Blurring first is
+	// what stops it looking like a grid of coloured squares.
+	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY,
+			(filter == "smooth" || m_crt) ? "linear" : "nearest");
+
+	// The scale-quality hint is read when a texture is created, so the texture has
+	// to be made again for a changed filter to mean anything.
+	if (m_texture)
+		SDL_DestroyTexture(m_texture);
+	m_texture = SDL_CreateTexture(m_renderer, SDL_PIXELFORMAT_ARGB8888,
+			SDL_TEXTUREACCESS_STREAMING, m_width, m_height);
+	if (!m_texture)
+		return false;
+
+	// The mask belongs to the old settings, and is rebuilt on the next frame.
+	if (m_mask) {
+		SDL_DestroyTexture(m_mask);
+		m_mask = nullptr;
+	}
+	m_maskWidth = 0;
+	m_maskHeight = 0;
+
+	// From the console's palette every time rather than from whatever this
+	// currently holds. Lifting an already-lifted palette would brighten it again
+	// on each visit to the dialog, and the drift would look like a bug in the
+	// filter rather than in the bookkeeping.
+	// The console's palette carries no alpha, so an opaque one is added here.
+	// brightenForCrt sets its own.
+	const std::uint32_t* base = nes::Ppu::nesPaletteRgb();
+	if (m_crt) {
+		brightenForCrt(base, m_argbPalette);
+	} else {
+		for (int i = 0; i < 64; i++)
+			m_argbPalette[i] = 0xFF000000u | base[i];
+	}
+	return true;
 }
 
 SDL_Rect SdlVideo::pictureRect() const {
@@ -353,7 +389,7 @@ void SdlVideo::configure() {
 		parent = m_host->window_handle(m_host->context);
 
 	if (!nesdlg::showFieldsDialog("SDL2 video", parent, &fields,
-			"Takes effect the next time the emulator starts."))
+			"Applied as soon as you press OK."))
 		return;
 
 	static const char* const FILTERS[] =
@@ -564,6 +600,18 @@ void SdlInput::configure() {
 	// emulator responds without being restarted.
 	if (m_loadOwn)
 		m_owned = onDisk;
+}
+
+bool SdlInput::applySettings() {
+	// The dialog writes the file rather than editing this instance, on purpose:
+	// the instance showing it is usually a throwaway. So reloading the file is how
+	// a new binding arrives -- and only an instance that owns its configuration
+	// can do that. One reading somebody else's says no, and the host reloads its
+	// own copy instead, which every reference then sees.
+	if (!m_loadOwn)
+		return false;
+	m_owned.load(nesgui::Config::path());
+	return true;
 }
 
 int SdlInput::padCount() const {

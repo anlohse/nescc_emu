@@ -98,6 +98,16 @@ void videoWindowToFrame(void* self, int windowX, int windowY,
 			frameX, frameY);
 }
 
+int videoApplySettings(void* self) {
+	// Everything this dialog can change is renderer state, so all of it takes
+	// effect now and there is nothing left for a restart.
+	try {
+		return static_cast<nesfe::SdlVideo*>(self)->applySettings() ? 1 : 0;
+	} catch (...) {
+		return 0;
+	}
+}
+
 const nes_video_api VIDEO_API = {
 	sizeof(nes_video_api),
 	videoCreate,
@@ -109,7 +119,8 @@ const nes_video_api VIDEO_API = {
 	videoSaveScreenshot,
 	videoConfigure,
 	videoNativeWindow,
-	videoWindowToFrame
+	videoWindowToFrame,
+	videoApplySettings
 };
 
 const nes_plugin_info VIDEO_INFO = {
@@ -247,6 +258,14 @@ void inputPollZapper(void* self, nes_zapper_state* out) {
 	out->trigger = state.trigger ? 1 : 0;
 }
 
+int inputApplySettings(void* self) {
+	try {
+		return static_cast<nesfe::SdlInput*>(self)->applySettings() ? 1 : 0;
+	} catch (...) {
+		return 0;
+	}
+}
+
 const nes_input_api INPUT_API = {
 	sizeof(nes_input_api),
 	inputCreate,
@@ -255,7 +274,8 @@ const nes_input_api INPUT_API = {
 	inputClose,
 	inputPoll,
 	inputConfigure,
-	inputPollZapper
+	inputPollZapper,
+	inputApplySettings
 };
 
 const nes_plugin_info INPUT_INFO = {

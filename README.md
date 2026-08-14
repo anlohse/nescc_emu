@@ -316,10 +316,18 @@ survives it, and so do A, X and Y. Hard Reset is the switch at the back, and cle
 
 `F1` opens the chooser, which also sets the window size, and every plugin's Settings
 button opens that plugin's own dialog: the filter and pixel shape for video, the output
-device, volume and buffer size for audio. All of it takes effect the next time the
-emulator starts — swapping a video plugin or reopening a sound device under a running
-console would mean tearing down the window and the event queue the dialog is itself
-running on.
+device, volume and buffer size for audio, the bindings and chosen device for controllers.
+
+**Those apply the moment you press OK.** A plugin gets an `apply_settings` call after its
+dialog is accepted and does as much as it safely can: video rebuilds its renderer state and
+palette without touching the window, so the window keeps its position and its focus; audio
+reopens the device, because which device and how much latency are properties of an open one;
+controllers reload their bindings. Each answers whether everything took effect, and the host
+says so when something did not, rather than leaving you to wonder whether OK did anything.
+
+**Choosing a different plugin still needs a restart**, and that one is not a shortcut. It
+would mean tearing down the window and the event queue the dialog is itself running on. The
+chooser says as much.
 
 Or press `F1` and open the controller plugin's own dialog, where a binding is set by
 pressing the key or gamepad button you want it on. Anything else in the same group that

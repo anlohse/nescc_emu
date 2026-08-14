@@ -64,6 +64,15 @@ public:
 	 */
 	void configure();
 
+	/**
+	 * Re-read the settings and redraw with them, without a restart.
+	 *
+	 * Everything this plugin offers is renderer state, so all of it can be applied
+	 * to a running window: the filter, the pixel shape, the CRT mask. Window size
+	 * and fullscreen belong to the host and are not here.
+	 */
+	bool applySettings() { return m_renderer ? applyPictureSettings() : true; }
+
 	/** The NES's pixel aspect on a television: 8:7, not square. */
 	static const int WIDE_WIDTH = 292;   // 256 * 8 / 7
 
@@ -96,6 +105,18 @@ private:
 	SDL_Texture* m_mask;
 	int m_maskWidth;
 	int m_maskHeight;
+
+	/**
+	 * Read the picture settings and act on them, without touching the window.
+	 *
+	 * Called from open() and again whenever the settings dialog is accepted, which
+	 * is what makes a chosen filter visible immediately rather than next launch.
+	 * Only the renderer's logical size, the texture and the palette depend on
+	 * these, so the window keeps its position and its focus.
+	 *
+	 * @return false only if the texture could not be created.
+	 */
+	bool applyPictureSettings();
 
 	/** Where the picture goes in the window, letterboxed to its aspect. */
 	SDL_Rect pictureRect() const;
@@ -158,6 +179,18 @@ public:
 	 * bindings on disk are what the next launch will use either way.
 	 */
 	void configure();
+
+	/**
+	 * Re-read the bindings and the device choice, without a restart.
+	 *
+	 * Only possible for an instance that owns its configuration -- the dialog
+	 * writes to the file, so reloading is how the new bindings arrive. An instance
+	 * reading a configuration somebody else owns cannot reload it and says so, and
+	 * the host reloads its own copy instead.
+	 *
+	 * @return true when this instance has taken the new settings on.
+	 */
+	bool applySettings();
 
 	/** How many pads are currently claimed by the two ports. */
 	int padCount() const;
