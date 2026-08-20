@@ -1,0 +1,162 @@
+# Builds, tests and packages on every push, and publishes nothing.
+#
+# The point of packaging here rather than only when releasing is that an
+# installer has failure modes a build does not: a missing DLL, a licence file
+# WiX will not read, a dependency quietly installing its own headers into the
+# package. Finding those on the tag that was supposed to be a release is finding
+# them at the worst possible moment. So the same package the release publishes is
+# built on every push -- and thrown away.
+#
+# Releases live in release.yml and are driven by tags.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+# A branch only needs its newest commit built.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows x64
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Cache fetched dependencies
+        uses: actions/cache@v4
+        with:
+          # SDL2 and doctest are built from source, which is most of the time
+          # spent here.
+          path: build/_deps
+          key: deps-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: deps-${{ runner.os }}-
+
+      - name: Ensure WiX 3 is available
+        shell: pwsh
+        run: |
+          # CPack's WIX generator drives candle.exe and light.exe, which are WiX
+          # 3. WiX 4 and later are a dotnet tool with a different command line
+          # and will not do -- so this looks for 3 specifically, and installs it
+          # rather than assuming the runner image ships it.
+          $candle = Get-ChildItem 'C:\Program Files (x86)\WiX Toolset*' -Recurse `
+              -Filter candle.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $candle) {
+            choco install wixtoolset --no-progress -y
+            $candle = Get-ChildItem 'C:\Program Files (x86)\WiX Toolset*' -Recurse `
+                -Filter candle.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          }
+          if (-not $candle) { throw 'WiX 3 (candle.exe) not found, and installing it did not produce one' }
+          Add-Content -Path $env:GITHUB_PATH -Value $candle.Directory.FullName
+          Write-Output "candle: $($candle.FullName)"
+
+      - name: Configure
+        shell: bash
+        run: |
+          # No sibling checkout on a runner, so this also exercises the fetch
+          # fallback that lets the repository be cloned on its own.
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        shell: bash
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd build
+          cpack -C Release -B "${GITHUB_WORKSPACE}/dist"
+          ls -l "${GITHUB_WORKSPACE}/dist"
+
+      - name: Check the package holds what it should
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          zip="$(ls *.zip)"
+
+          # An installer missing a DLL still builds, installs, and then fails to
+          # start on a machine that is not this one -- so the contents are
+          # asserted rather than eyeballed. The DLLs are the ones that matter:
+          # they come from a generator expression, so they are exactly the
+          # failure a copy-by-name list used to cause and a build cannot catch.
+          for wanted in nes_gui.exe nes_run.exe SDL2.dll emu6502_lib.dll \
+                        plugins/audio_sdl.dll LICENSE README.md; do
+            if ! unzip -l "$zip" | grep -q "/${wanted}$"; then
+              echo "missing from the package: ${wanted}"
+              unzip -l "$zip"
+              exit 1
+            fi
+          done
+
+          # And nothing a dependency installed. doctest is built here through
+          # FetchContent and its install rules join this build; a package made
+          # from all of them carried its headers and CMake config files inside
+          # the emulator.
+          if unzip -l "$zip" | grep -qiE 'doctest|/lib/cmake/|/include/'; then
+            echo "the package contains files belonging to a dependency"
+            unzip -l "$zip"
+            exit 1
+          fi
+
+          # The MSI is the thing that was asked for, so its absence is a failure
+          # rather than something to notice later.
+          ls *.msi >/dev/null
+          echo "package contents are as expected"
+
+      - name: Check where the installer would put things
+        shell: pwsh
+        run: |
+          # An administrative install unpacks the MSI without installing it, so
+          # the layout can be asserted rather than discovered by someone who has
+          # already run it. The path matters as much as the contents: a versioned
+          # folder inside the install directory moves the program on every
+          # upgrade and leaves shortcuts pointing at the old one, which is
+          # exactly what the first MSI did.
+          $msi = (Get-ChildItem dist -Filter *.msi | Select-Object -First 1).FullName
+          $out = Join-Path $env:RUNNER_TEMP 'msi-check'
+          Remove-Item $out -Recurse -Force -ErrorAction SilentlyContinue
+          $p = Start-Process msiexec -ArgumentList '/a',"`"$msi`"",'/qn',"TARGETDIR=`"$out`"" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "msiexec returned $($p.ExitCode)" }
+
+          $files = Get-ChildItem $out -Recurse -File |
+              ForEach-Object { $_.FullName.Substring($out.Length).TrimStart('\') } |
+              Where-Object { $_ -notlike '*.msi' }
+          $files | Sort-Object | ForEach-Object { Write-Output $_ }
+
+          foreach ($wanted in 'nescc_emu\nes_gui.exe', 'nescc_emu\nes_run.exe',
+                              'nescc_emu\SDL2.dll', 'nescc_emu\emu6502_lib.dll',
+                              'nescc_emu\plugins\audio_sdl.dll',
+                              'nescc_emu\LICENSE') {
+            if ($files -notcontains $wanted) {
+              throw "the installer does not place $wanted"
+            }
+          }
+
+          # And no version anywhere in a path, which is the fault above stated
+          # directly rather than as a list of the paths it produced.
+          $versioned = $files | Where-Object { $_ -match '\d+\.\d+\.\d+' }
+          if ($versioned) {
+            throw "installed paths carry a version number: $($versioned -join ', ')"
+          }
+          Write-Output 'the installer places its files where it should'
+
+      - name: Keep the packages on the run
+        uses: actions/upload-artifact@v4
+        with:
+          name: nescc_emu-windows-x64-${{ github.sha }}
+          path: |
+            dist/*.msi
+            dist/*.zip
+          if-no-files-found: error

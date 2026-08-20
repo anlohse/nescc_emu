@@ -93,13 +93,36 @@ jobs:
           key: deps-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
           restore-keys: deps-${{ runner.os }}-
 
+      - name: Ensure WiX 3 is available
+        shell: pwsh
+        run: |
+          # CPack's WIX generator drives candle.exe and light.exe, which are WiX
+          # 3. WiX 4 and later are a dotnet tool with a different command line
+          # and will not do -- so this looks for 3 specifically, and installs it
+          # rather than assuming the runner image ships it.
+          $candle = Get-ChildItem 'C:\Program Files (x86)\WiX Toolset*' -Recurse `
+              -Filter candle.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $candle) {
+            choco install wixtoolset --no-progress -y
+            $candle = Get-ChildItem 'C:\Program Files (x86)\WiX Toolset*' -Recurse `
+                -Filter candle.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          }
+          if (-not $candle) { throw 'WiX 3 (candle.exe) not found, and installing it did not produce one' }
+          Add-Content -Path $env:GITHUB_PATH -Value $candle.Directory.FullName
+          Write-Output "candle: $($candle.FullName)"
+
       - name: Configure
         shell: bash
         run: |
           # No sibling checkout on a runner, so this also exercises the fetch
           # fallback that lets the repository be cloned on its own.
+          #
+          # The tag is the only source of truth for the version, so it is handed
+          # to CMake rather than kept in a second place that could disagree with
+          # it.
           cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=Release \
+            -DNES_VERSION="${{ steps.v.outputs.version }}" \
             -DEMU6502_GIT_TAG="${{ inputs.core_ref || 'main' }}"
 
       - name: Build
@@ -109,28 +132,49 @@ jobs:
         shell: bash
         run: ctest --test-dir build -C Release --output-on-failure
 
-      - name: Stage the package
+      - name: Package
         id: pkg
         shell: bash
         run: |
           set -euo pipefail
           name="nescc_emu-${{ steps.v.outputs.version }}-windows-x64"
-          mkdir -p "dist/${name}"
 
-          cp build/bin/Release/nes_gui.exe      "dist/${name}/"
-          cp build/bin/Release/nes_run.exe      "dist/${name}/"
-          cp build/bin/Release/emu6502_lib.dll  "dist/${name}/"
-          cp build/bin/Release/SDL2.dll         "dist/${name}/"
-          cp LICENSE README.md ROADMAP.md       "dist/${name}/"
+          # CPack, from the install() rules in CMakeLists.txt, rather than a copy
+          # list here. A copy list is a second description of what the package
+          # contains, and the two drift the moment a plugin or a DLL is added:
+          # the build keeps working and the package quietly ships without it.
+          cd build
+          cpack -C Release -B "${GITHUB_WORKSPACE}/dist"
+          cd "${GITHUB_WORKSPACE}"
 
           echo "name=${name}" >> "$GITHUB_OUTPUT"
-          ls -l "dist/${name}"
+          ls -l dist
 
-      - name: Zip it
-        shell: pwsh
+      - name: Check the package holds what it should
+        shell: bash
         run: |
-          Compress-Archive -Path "dist/${{ steps.pkg.outputs.name }}" `
-                           -DestinationPath "dist/${{ steps.pkg.outputs.name }}.zip"
+          set -euo pipefail
+          zip="dist/${{ steps.pkg.outputs.name }}.zip"
+          msi="dist/${{ steps.pkg.outputs.name }}.msi"
+
+          # An installer missing a DLL still builds, installs, and then fails to
+          # start on a machine that is not this one. Both files existing under the
+          # names the notes promise is the other half of that.
+          test -f "$msi"
+          for wanted in nes_gui.exe nes_run.exe SDL2.dll emu6502_lib.dll \
+                        plugins/audio_sdl.dll LICENSE README.md; do
+            if ! unzip -l "$zip" | grep -q "/${wanted}$"; then
+              echo "missing from the package: ${wanted}"
+              unzip -l "$zip"
+              exit 1
+            fi
+          done
+          if unzip -l "$zip" | grep -qiE 'doctest|/lib/cmake/|/include/'; then
+            echo "the package contains files belonging to a dependency"
+            unzip -l "$zip"
+            exit 1
+          fi
+          echo "package contents are as expected"
 
       - name: Write the release notes
         shell: bash
@@ -165,9 +209,16 @@ jobs:
 
             echo "## Download"
             echo
-            echo "\`${{ steps.pkg.outputs.name }}.zip\` — Windows x64. Unzip and run"
-            echo "\`nes_gui.exe <rom.nes>\`. Everything needed is in the archive;"
-            echo "there is nothing to install."
+            echo "Windows x64, two ways round — the same files either way."
+            echo
+            echo "\`${{ steps.pkg.outputs.name }}.msi\` — the installer. Adds a Start"
+            echo "Menu entry and a desktop shortcut, and uninstalls from Settings like"
+            echo "anything else. Installing a newer version replaces the old one rather"
+            echo "than sitting beside it."
+            echo
+            echo "\`${{ steps.pkg.outputs.name }}.zip\` — the same tree, portable."
+            echo "Unzip and run \`nes_gui.exe <rom.nes>\`. Nothing to install and"
+            echo "nothing to uninstall."
             echo
             echo "**No ROMs are included or downloaded.** Supply your own."
             echo
@@ -179,11 +230,13 @@ jobs:
 
           cat release-notes.md
 
-      - name: Keep the package on the run as well
+      - name: Keep the packages on the run as well
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.pkg.outputs.name }}
-          path: dist/${{ steps.pkg.outputs.name }}.zip
+          path: |
+            dist/${{ steps.pkg.outputs.name }}.msi
+            dist/${{ steps.pkg.outputs.name }}.zip
           if-no-files-found: error
 
       - name: Publish the release
@@ -195,6 +248,7 @@ jobs:
           # Creates the tag at this commit when it does not already exist, which
           # is what makes the manual path work before the first tag.
           gh release create "${{ steps.v.outputs.tag }}" \
+            "dist/${{ steps.pkg.outputs.name }}.msi" \
             "dist/${{ steps.pkg.outputs.name }}.zip" \
             --title "${{ steps.v.outputs.tag }}" \
             --notes-file release-notes.md \
