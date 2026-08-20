@@ -1,5 +1,11 @@
 cmake_minimum_required(VERSION 3.16)
-project(nes)
+
+# The version stamped into the installer, and the one thing about a release that
+# cannot be derived. A git tag is the real source of truth -- the release
+# workflow passes the tag's version in here -- and this default is what a plain
+# local build gets so that packaging works without one.
+set(NES_VERSION "1.2.0" CACHE STRING "Version stamped into packages")
+project(nes VERSION ${NES_VERSION})
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -158,6 +164,13 @@ option(NES_BUILD_TESTS "Build the NES test suite" ON)
 if(NES_BUILD_TESTS)
     include(FetchContent)
     if(NOT TARGET doctest::doctest)
+        # And do not let the test framework install itself. Built here through
+        # FetchContent, its install() rules join this build, and a package made
+        # from them carries doctest's headers and CMake config files inside the
+        # emulator. The component filter below catches this too; both are cheap,
+        # and stopping it at the source keeps the package honest even for a
+        # generator that ignores components.
+        set(DOCTEST_NO_INSTALL ON CACHE BOOL "" FORCE)
         FetchContent_Declare(
             doctest
             GIT_REPOSITORY https://github.com/doctest/doctest.git
@@ -270,4 +283,109 @@ if(NES_BUILD_GUI AND NES_BUILD_TESTS)
     # The loader tests open the real audio plugin, so it has to exist first.
     add_dependencies(nes_gui_test nes_audio_sdl)
     add_test(NAME nes_gui_test COMMAND nes_gui_test)
+endif()
+
+# ------------------------------------------------------------------------------
+# Packaging
+# ------------------------------------------------------------------------------
+# An MSI for Windows, plus the same tree as a ZIP for people who would rather
+# not install anything.
+#
+# The contents are described once, here, as install() rules -- not as a list of
+# files to copy in a release script. A copy list in a workflow is a second
+# description of the same thing, and the two drift the moment a plugin or a DLL
+# is added: the build keeps working, the package quietly ships without it, and
+# nothing fails until somebody runs the installed copy.
+if(NES_BUILD_GUI AND WIN32)
+    # Flat, because this is a program somebody double-clicks rather than a
+    # library somebody links. The plugins folder is the one piece of structure
+    # that matters, and it has to survive because that is where the host looks.
+    install(TARGETS nes_gui nes_run RUNTIME DESTINATION . COMPONENT runtime)
+    install(TARGETS nes_audio_sdl
+        LIBRARY DESTINATION plugins COMPONENT runtime
+        RUNTIME DESTINATION plugins COMPONENT runtime)
+    install(FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
+        "${CMAKE_CURRENT_SOURCE_DIR}/README.md"
+        "${CMAKE_CURRENT_SOURCE_DIR}/ROADMAP.md"
+        DESTINATION . COMPONENT runtime)
+
+    # SDL2 and the 6502 core are shared libraries, so the program does not start
+    # without them sitting alongside it. Asking CMake which DLLs the executable
+    # actually resolves to is better than naming them: it cannot be out of date,
+    # and it keeps working when SDL is found on the machine instead of built here.
+    if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.21)
+        install(FILES $<TARGET_RUNTIME_DLLS:nes_gui>
+            DESTINATION . COMPONENT runtime)
+    else()
+        # Named explicitly for older CMake, which has no way to ask.
+        install(FILES $<TARGET_FILE:SDL2::SDL2> $<TARGET_FILE:emu6502::emu6502>
+            DESTINATION . COMPONENT runtime)
+    endif()
+
+    # WiX shows the licence in its own dialog and wants RTF; CPack will convert a
+    # .txt for us, but only if it can see that extension. The repository's file
+    # has none, so it is copied to one that does.
+    configure_file("${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
+        "${CMAKE_CURRENT_BINARY_DIR}/LICENSE.txt" COPYONLY)
+
+    set(CPACK_PACKAGE_NAME "nescc_emu")
+    set(CPACK_PACKAGE_VENDOR "Alan N. Lohse")
+    set(CPACK_PACKAGE_DESCRIPTION_SUMMARY
+        "A NES emulator built on the emu6502 core")
+    set(CPACK_PACKAGE_VERSION "${NES_VERSION}")
+    set(CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/anlohse/nescc_emu")
+    set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_BINARY_DIR}/LICENSE.txt")
+
+    # The same name the release has always used, so a link to an older download
+    # and a link to a new one look like the same project.
+    set(CPACK_PACKAGE_FILE_NAME "nescc_emu-${NES_VERSION}-windows-x64")
+    set(CPACK_PACKAGE_INSTALL_DIRECTORY "nescc_emu")
+
+    # A Start Menu entry for the window, and none for the headless runner --
+    # nes_run is a command-line tool and a shortcut to it would open and vanish.
+    set(CPACK_PACKAGE_EXECUTABLES "nes_gui;NES emulator")
+    set(CPACK_CREATE_DESKTOP_LINKS "nes_gui")
+
+    # This GUID identifies the *product line* rather than any one build, and is
+    # what lets an MSI replace the version already installed instead of
+    # installing beside it. It must therefore never change again: a new GUID
+    # would leave every previously installed copy on the machine with no way to
+    # remove it except by hand.
+    set(CPACK_WIX_UPGRADE_GUID "ACC992E0-3D62-4E0A-BA44-49C998681226")
+    set(CPACK_WIX_PROGRAM_MENU_FOLDER "nescc_emu")
+    set(CPACK_WIX_PROPERTY_ARPHELPLINK "${CPACK_PACKAGE_HOMEPAGE_URL}")
+    set(CPACK_WIX_PROPERTY_ARPURLINFOABOUT "${CPACK_PACKAGE_HOMEPAGE_URL}")
+
+    # WIX is what was asked for; ZIP alongside it costs nothing and is the same
+    # tree, which is worth having for anyone who cannot or would rather not run
+    # an installer. Both come from the install() rules above, so they cannot
+    # disagree about what is in the package.
+    set(CPACK_GENERATOR "WIX;ZIP")
+
+    # Only what this project installs, and this is not a nicety. SDL2 and doctest
+    # are built here through FetchContent, which brings their own install() rules
+    # into this build -- so a package built from "everything installable" shipped
+    # doctest's headers and CMake config files inside the emulator. Naming one
+    # component and packaging only that excludes anything a dependency installs,
+    # including dependencies added later, rather than removing them one at a time
+    # as they are noticed.
+    set(CPACK_COMPONENTS_ALL runtime)
+    set(CPACK_COMPONENTS_GROUPING ALL_COMPONENTS_IN_ONE)
+    # The archive generators ignore components entirely unless this is on -- they
+    # default to installing everything and naming no component at all, which is
+    # how the first ZIP came out with doctest inside it despite the list above.
+    # WiX reads the component list without being asked.
+    set(CPACK_ARCHIVE_COMPONENT_INSTALL ON)
+    # And put the files inside a folder named like the archive, which component
+    # packaging otherwise drops. Without it the ZIP unpacks nine loose files into
+    # whatever directory it was opened in.
+    set(CPACK_COMPONENT_INCLUDE_TOPLEVEL_DIRECTORY ON)
+    # Nothing for a person to choose in the installer: there is one program here,
+    # and a feature tree with a single feature in it is only a page to click past.
+    set(CPACK_COMPONENT_RUNTIME_HIDDEN TRUE)
+    set(CPACK_COMPONENT_RUNTIME_REQUIRED TRUE)
+    set(CPACK_COMPONENT_RUNTIME_DISPLAY_NAME "nescc_emu")
+
+    include(CPack)
 endif()

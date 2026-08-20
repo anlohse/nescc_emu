@@ -80,3 +80,6 @@ vcpkg_installed/
 # Test output and caches
 Testing/
 .cache/
+
+# CPack writes here when packaging by hand.
+dist/
