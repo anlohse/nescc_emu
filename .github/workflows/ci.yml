@@ -115,6 +115,43 @@ jobs:
           ls *.msi >/dev/null
           echo "package contents are as expected"
 
+      - name: Check where the installer would put things
+        shell: pwsh
+        run: |
+          # An administrative install unpacks the MSI without installing it, so
+          # the layout can be asserted rather than discovered by someone who has
+          # already run it. The path matters as much as the contents: a versioned
+          # folder inside the install directory moves the program on every
+          # upgrade and leaves shortcuts pointing at the old one, which is
+          # exactly what the first MSI did.
+          $msi = (Get-ChildItem dist -Filter *.msi | Select-Object -First 1).FullName
+          $out = Join-Path $env:RUNNER_TEMP 'msi-check'
+          Remove-Item $out -Recurse -Force -ErrorAction SilentlyContinue
+          $p = Start-Process msiexec -ArgumentList '/a',"`"$msi`"",'/qn',"TARGETDIR=`"$out`"" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "msiexec returned $($p.ExitCode)" }
+
+          $files = Get-ChildItem $out -Recurse -File |
+              ForEach-Object { $_.FullName.Substring($out.Length).TrimStart('\') } |
+              Where-Object { $_ -notlike '*.msi' }
+          $files | Sort-Object | ForEach-Object { Write-Output $_ }
+
+          foreach ($wanted in 'nescc_emu\nes_gui.exe', 'nescc_emu\nes_run.exe',
+                              'nescc_emu\SDL2.dll', 'nescc_emu\emu6502_lib.dll',
+                              'nescc_emu\plugins\audio_sdl.dll',
+                              'nescc_emu\LICENSE') {
+            if ($files -notcontains $wanted) {
+              throw "the installer does not place $wanted"
+            }
+          }
+
+          # And no version anywhere in a path, which is the fault above stated
+          # directly rather than as a list of the paths it produced.
+          $versioned = $files | Where-Object { $_ -match '\d+\.\d+\.\d+' }
+          if ($versioned) {
+            throw "installed paths carry a version number: $($versioned -join ', ')"
+          }
+          Write-Output 'the installer places its files where it should'
+
       - name: Keep the packages on the run
         uses: actions/upload-artifact@v4
         with:

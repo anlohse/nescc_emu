@@ -380,7 +380,13 @@ if(NES_BUILD_GUI AND WIN32)
     # And put the files inside a folder named like the archive, which component
     # packaging otherwise drops. Without it the ZIP unpacks nine loose files into
     # whatever directory it was opened in.
+    #
+    # The MSI wants the opposite, and turns this back off in CPackOptions.cmake
+    # below: an installer has a directory of its own already, and a versioned
+    # folder nested inside it would move the program on every upgrade.
     set(CPACK_COMPONENT_INCLUDE_TOPLEVEL_DIRECTORY ON)
+    set(CPACK_PROJECT_CONFIG_FILE
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CPackOptions.cmake")
     # Nothing for a person to choose in the installer: there is one program here,
     # and a feature tree with a single feature in it is only a page to click past.
     set(CPACK_COMPONENT_RUNTIME_HIDDEN TRUE)
