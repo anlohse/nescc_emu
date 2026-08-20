@@ -40,7 +40,7 @@ that keeps the status bar fixed while the level moves beneath it all work.
 | Loadable plugins | `plugins/audio_sdl` is a real shared library; a module shadows the built-in of the same id |
 | Plugin chooser | `F1`, or `--settings` with no ROM: pick a plugin per job and the window size, saved to `nes.cfg` |
 | Brightness | a gamma curve on the palette, sharing one pass with the CRT lift |
-| Controllers | one device per console port, chosen by name — keyboard or a numbered gamepad |
+| Controllers | one device per console port, chosen by name — keyboard or a numbered gamepad; unknown pads get a guessed mapping rather than being ignored |
 | Rebinding | the controller plugin's own dialog: press Bind, then press the key or pad button |
 | Plugin settings | each plugin's own dialog — video's scaling style and pixel shape, audio's device, volume and buffer |
 | CRT style | a quadratic stretch, then a mask multiplied over it — a television's slot mask or a monitor's grille, at either of two pitches |
@@ -172,10 +172,39 @@ one" quietly gave player one a socket with nothing in it. No auto-detection can 
 because nothing distinguishes an empty socket from an idle pad. Choosing does.
 
 It also makes two people playing unambiguous: a port set to a gamepad ignores the keyboard,
-so there is no question about who pressed what. Anything SDL recognises works — an Xbox pad,
-a DualShock, a generic USB adapter — because SDL's game-controller layer maps them all onto
-one layout first. Pads can be connected or removed while a game is running; a port whose
-chosen gamepad is absent simply reads nothing, and the dialog still lists it and says so.
+so there is no question about who pressed what. Pads can be connected or removed while a
+game is running; a port whose chosen gamepad is absent simply reads nothing, and the dialog
+still lists it and says so.
+
+**A pad SDL has never heard of is given a mapping rather than ignored.** SDL reads a pad two
+ways. Its joystick layer reports raw hardware — button 7, axis 1, hat 0 — and its game
+controller layer reports named controls, `a` and `start` and `dpleft`, which is what
+bindings are written against and what everything here uses. But the named layer only works
+for devices SDL holds a *mapping* for, in a table keyed by GUID that covers the pads someone
+thought to add.
+
+A generic USB pad is usually not in it. For such a device `SDL_IsGameController` returns
+false, `SDL_GameControllerOpen` refuses, and every list of pads in the program comes back
+empty — for a pad that works perfectly. That failure is invisible from outside: the pad
+lights up, Windows tests it, other games use it, and this emulator shows nothing.
+
+So the mapping is written from what the device reports. Two rules shape the guess. Select
+and Start are the last two buttons on essentially every pad of this kind, so they are taken
+from the top — but only when enough buttons remain underneath for the face controls, because
+a four-button pad with no Start is usable and a pad whose Start and A are the same button is
+not. And the directions come from a hat when there is one and from the first two axes when
+there is not, since a pad with no hat puts its d-pad there; in that case the axes are *not*
+also reported as a stick, or every press would arrive twice.
+
+A guess puts the **names** in doubt, not the pad — whichever button SDL ends up calling `x`
+may be labelled something else on the plastic. That costs nothing, because nothing here
+assumes a layout: the bindings dialog stores whatever button was actually pressed. Getting
+the device visible is the whole problem. A real mapping is never overridden; a guess only
+fills a gap.
+
+`--pads` reports all of this, including the devices SDL refuses to present as controllers —
+their GUID, vendor and product, button, axis and hat counts, and live presses. Giving up at
+the "no mapping" line is what once left a working pad looking like a broken emulator.
 
 Both face-button diagonals are accepted, because the NES has two buttons and a modern pad
 has four; binding only one pair makes the other half feel broken.

@@ -13,6 +13,7 @@
 #include "frontend/FileDialog.h"
 #include "frontend/KeysReference.h"
 #include "frontend/MenuBar.h"
+#include "frontend/PadMapping.h"
 #include "frontend/SdlBackend.h"
 #include "frontend/PluginSettings.h"
 #include "frontend/SdlPlugin.h"
@@ -153,7 +154,11 @@ int reportPads(const nesgui::Config& config) {
 	std::printf("joystick events: %d, controller events: %d  (1 = enabled)\n",
 			SDL_JoystickEventState(SDL_QUERY),
 			SDL_GameControllerEventState(SDL_QUERY));
-	std::printf("joysticks seen: %d\n\n", SDL_NumJoysticks());
+	std::printf("joysticks seen: %d\n", SDL_NumJoysticks());
+	// Exactly what the emulator does before it looks, so this reports what the
+	// game will see rather than what SDL shipped with.
+	std::printf("mappings guessed for unknown pads: %d\n\n",
+			nesfe::mapUnknownPads());
 
 	// A real window, because on Windows a joystick is only read while the
 	// application has a foreground one. A windowless report can show a working
@@ -167,13 +172,36 @@ int reportPads(const nesgui::Config& config) {
 		std::printf("no window (%s); readings may be unreliable\n", SDL_GetError());
 
 	SDL_GameController* pads[2] = { nullptr, nullptr };
+	SDL_Joystick* unmapped[4] = { nullptr, nullptr, nullptr, nullptr };
 	int open = 0;
+	int raw = 0;
 	for (int i = 0; i < SDL_NumJoysticks(); i++) {
 		std::printf("device %d: \"%s\"\n", i, SDL_JoystickNameForIndex(i));
 		if (!SDL_IsGameController(i)) {
 			// Without a mapping SDL will not present it as a game controller, and
-			// nothing in the emulator will look at it.
+			// nothing in the emulator will look at it. Report the device anyway,
+			// because this is the case that needs reporting most: everything
+			// needed to write a mapping for it is here, and giving up at this line
+			// is what left a working pad looking like a broken emulator.
 			std::printf("    NOT a game controller: no mapping for this device\n");
+			if (raw >= 4)
+				continue;
+			SDL_Joystick* stick = SDL_JoystickOpen(i);
+			if (!stick) {
+				std::printf("    and it will not open as a joystick: %s\n",
+						SDL_GetError());
+				continue;
+			}
+			unmapped[raw++] = stick;
+			char guid[64] = { 0 };
+			SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(stick), guid, sizeof(guid));
+			std::printf("    but as a plain joystick it is there:\n");
+			std::printf("      guid    %s\n", guid);
+			std::printf("      raw     %d buttons, %d axes, %d hats\n",
+					SDL_JoystickNumButtons(stick), SDL_JoystickNumAxes(stick),
+					SDL_JoystickNumHats(stick));
+			std::printf("      vendor  0x%04X product 0x%04X\n",
+					SDL_JoystickGetVendor(stick), SDL_JoystickGetProduct(stick));
 			continue;
 		}
 		if (open < 2 && (pads[open] = SDL_GameControllerOpen(i)) != nullptr) {
@@ -198,20 +226,26 @@ int reportPads(const nesgui::Config& config) {
 			std::printf("    could not open: %s\n", SDL_GetError());
 		}
 	}
-	if (open == 0) {
-		std::printf("\nNothing to poll. SDL is not presenting any device as a "
-				"game controller.\n");
+	if (open == 0 && raw == 0) {
+		std::printf("\nNothing to poll: SDL sees no joystick of any kind.\n");
 		return 1;
 	}
+	if (open == 0)
+		std::printf("\nNo device has a mapping, so nothing reaches the game. The "
+				"raw readings below\nare what a mapping would have to be written "
+				"against.\n");
 
-	std::printf("\nBindings, port 1:");
-	static const char* const NAMES[8] =
-			{ "a", "b", "select", "start", "up", "down", "left", "right" };
-	for (int i = 0; i < 8; i++) {
-		const char* to = SDL_GameControllerGetStringForButton(config.padButtons[0][i]);
-		std::printf(" %s=%s", NAMES[i], to ? to : "unbound");
+	if (open > 0) {
+		std::printf("\nBindings, port 1:");
+		static const char* const NAMES[8] =
+				{ "a", "b", "select", "start", "up", "down", "left", "right" };
+		for (int i = 0; i < 8; i++) {
+			const char* to = SDL_GameControllerGetStringForButton(config.padButtons[0][i]);
+			std::printf(" %s=%s", NAMES[i], to ? to : "unbound");
+		}
+		std::printf("\n");
 	}
-	std::printf("\n\nPress buttons. Ten seconds, then it stops.\n");
+	std::printf("\nPress buttons. Ten seconds, then it stops.\n");
 
 	const Uint32 until = SDL_GetTicks() + 10000;
 	std::string previous;
@@ -263,6 +297,43 @@ int reportPads(const nesgui::Config& config) {
 					down += std::to_string(SDL_JoystickGetHat(stick, h));
 				}
 		}
+
+		// The devices SDL refused to present as controllers, read directly. This
+		// is the only view of them there is, and it is what says whether such a
+		// pad is usable at all: buttons and hats arriving here mean the hardware
+		// and the driver are fine and only the mapping is missing.
+		for (int p = 0; p < raw; p++) {
+			for (int b = 0; b < SDL_JoystickNumButtons(unmapped[p]); b++)
+				if (SDL_JoystickGetButton(unmapped[p], b)) {
+					down += " unmapped";
+					down += std::to_string(p);
+					down += ":b";
+					down += std::to_string(b);
+				}
+			for (int h = 0; h < SDL_JoystickNumHats(unmapped[p]); h++)
+				if (SDL_JoystickGetHat(unmapped[p], h) != SDL_HAT_CENTERED) {
+					down += " unmapped";
+					down += std::to_string(p);
+					down += ":h";
+					down += std::to_string(h);
+					down += "=";
+					down += std::to_string(SDL_JoystickGetHat(unmapped[p], h));
+				}
+			// Axes only when pushed well past centre: a cheap pad's sticks rest
+			// off-zero, and a resting stick reported as a press would bury the
+			// button presses this is here to show.
+			for (int a = 0; a < SDL_JoystickNumAxes(unmapped[p]); a++) {
+				const int value = SDL_JoystickGetAxis(unmapped[p], a);
+				if (value > 16000 || value < -16000) {
+					down += " unmapped";
+					down += std::to_string(p);
+					down += ":a";
+					down += std::to_string(a);
+					down += (value > 0) ? "+" : "-";
+				}
+			}
+		}
+
 		if (down != previous) {
 			std::printf("pad:%s\n", down.empty() ? " (nothing)" : down.c_str());
 			std::fflush(stdout);
@@ -273,6 +344,8 @@ int reportPads(const nesgui::Config& config) {
 
 	for (int p = 0; p < open; p++)
 		SDL_GameControllerClose(pads[p]);
+	for (int p = 0; p < raw; p++)
+		SDL_JoystickClose(unmapped[p]);
 	if (window)
 		SDL_DestroyWindow(window);
 	return 0;
