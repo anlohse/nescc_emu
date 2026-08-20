@@ -11,6 +11,7 @@
 //
 
 #include "BindingsDialog.h"
+#include "PadMapping.h"
 
 #if defined(_WIN32)
 
@@ -211,6 +212,11 @@ void openPads(DialogState* state) {
 			return;
 		state->ownsGameController = true;
 	}
+	// A pad with no mapping is not a game controller to SDL, so without this the
+	// list below comes back empty and the dialog offers a player nothing to
+	// choose -- for a pad that works.
+	nesfe::mapUnknownPads();
+
 	int found = 0;
 	for (int i = 0; i < SDL_NumJoysticks() && found < nesgui::MAX_GAMEPADS; i++)
 		if (SDL_IsGameController(i))

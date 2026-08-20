@@ -3,6 +3,7 @@
 #include "BindingsDialog.h"
 #include "../plugin/FieldsDialog.h"
 #include "CrtFilter.h"
+#include "PadMapping.h"
 #include <cstring>
 
 #include <SDL_syswm.h>
@@ -616,6 +617,13 @@ bool SdlInput::open(Error* /*error*/) {
 	if (m_loadOwn)
 		m_owned.load(nesgui::Config::path());
 
+	// Before looking, make sure there is something to see. A pad SDL has no
+	// mapping for is not a game controller as far as SDL_IsGameController is
+	// concerned, so without this the loop below walks straight past a working
+	// device -- which is how a generic USB pad came to look like a broken
+	// emulator.
+	mapUnknownPads();
+
 	// Adopt anything already plugged in when we started. A machine with no pad
 	// is not an error -- the keyboard is always there.
 	for (int i = 0; i < SDL_NumJoysticks(); i++)
@@ -635,6 +643,14 @@ void SdlInput::close() {
 void SdlInput::addPad(int deviceIndex) {
 	if (!SDL_IsGameController(deviceIndex))
 		return;
+	// Once only, however many times we are told about it. A pad that arrives
+	// without a mapping is announced as a joystick and then, once it has one, as
+	// a controller as well -- and a device opened into two slots would appear
+	// twice in the dialog and quietly eat a slot another player needs.
+	const SDL_JoystickID arriving = SDL_JoystickGetDeviceInstanceID(deviceIndex);
+	for (int i = 0; i < nesgui::MAX_GAMEPADS; i++)
+		if (m_pads[i] && instanceId(m_pads[i]) == arriving)
+			return;
 	// Into the first free slot, and that slot number is what a person chooses
 	// between: "Gamepad 1" is this list's first entry, not console port one.
 	// Opening a pad no longer decides anything about who is playing, which is the
@@ -806,6 +822,14 @@ void SdlInput::poll(InputState* out) {
 			out->commands |= COMMAND_QUIT;
 		} else if (event.type == SDL_CONTROLLERDEVICEADDED) {
 			addPad(event.cdevice.which);
+		} else if (event.type == SDL_JOYDEVICEADDED) {
+			// The only notice a pad SDL has no mapping for ever gives. It is not a
+			// game controller yet, so the event above will not fire for it -- give
+			// it a mapping and then adopt it, rather than waiting for a second
+			// event that is not coming.
+			if (!SDL_IsGameController(event.jdevice.which)
+					&& mapUnknownPads() > 0)
+				addPad(event.jdevice.which);
 		} else if (event.type == SDL_CONTROLLERDEVICEREMOVED) {
 			removePad(event.cdevice.which);
 		} else if (event.type == SDL_CONTROLLERBUTTONDOWN) {

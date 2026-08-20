@@ -104,6 +104,7 @@ if(NES_BUILD_GUI)
         src/frontend/MenuModel.cpp
         src/frontend/KeysReference.cpp
         src/frontend/CrtFilter.cpp
+        src/frontend/PadMapping.cpp
         src/frontend/MenuBarWin32.cpp
         src/frontend/MenuBarStub.cpp
         src/frontend/FileDialogWin32.cpp
@@ -247,10 +248,12 @@ if(NES_BUILD_GUI AND NES_BUILD_TESTS)
         test_src/testMenuModel.cpp
         test_src/testKeysReference.cpp
         test_src/testCrtFilter.cpp
+        test_src/testPadMapping.cpp
         src/GuiConfig.cpp
         src/frontend/MenuModel.cpp
         src/frontend/KeysReference.cpp
         src/frontend/CrtFilter.cpp
+        src/frontend/PadMapping.cpp
         src/frontend/App.cpp
         src/frontend/HostServices.cpp
         src/frontend/PluginSettings.cpp
